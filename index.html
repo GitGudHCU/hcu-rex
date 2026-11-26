@@ -22,6 +22,7 @@
   #submitForm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px; margin-bottom: 12px;
           border: 2px solid #c4561d; border-radius: 6px; }
   #submitForm .res { flex-basis: 100%; font-weight: bold; color: #c4561d; }
+  #pname:read-only { background: #f3f3f1; }
   #pname { flex: 1; min-width: 0; padding: 8px; font: 15px "Courier New", monospace; border: 2px solid #535353; border-radius: 6px; color: #535353; background: #fff; }
   #board button { padding: 8px 12px; font: bold 14px "Courier New", monospace; border: 2px solid #535353; background: #fff; color: #535353; border-radius: 6px; cursor: pointer; }
   #board button.on, #btnSubmit { background: #535353 !important; color: #fff !important; }
@@ -49,7 +50,7 @@
   <section id="board" hidden>
     <form id="submitForm" hidden>
       <div class="res" id="resText"></div>
-      <input id="pname" maxlength="16" placeholder="Name (optional)" autocomplete="nickname" aria-label="Name für die Bestenliste (optional)">
+      <input id="pname" maxlength="16" placeholder="Spitzname (optional)" autocomplete="nickname" aria-label="Spitzname für die Bestenliste (optional)">
       <button id="btnSubmit" type="submit">Eintragen</button>
       <div id="submitMsg" role="status"></div>
     </form>
@@ -1241,7 +1242,23 @@
     const api = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
     const headers = { apikey: SUPABASE_KEY, 'Content-Type': 'application/json' };   // publishable Key gehört nur in den apikey-Header
     let pending = null, lastId = null;
-    try { el('pname').value = localStorage.getItem('hcuRexName') || ''; } catch (e) {}
+    const store = {
+      get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+      set(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+    };
+    // Pro Gerät ein Eintrag: Nach dem ersten Eintragen bleibt der Name fest
+    const locked = store.get('hcuRexLockedName');
+    if (locked) { el('pname').value = locked; el('pname').readOnly = true; }
+    // zufällige Geräte-Kennung, erst beim Eintragen angelegt
+    function deviceId() {
+      let id = store.get('hcuRexDevice');
+      if (!id) {
+        id = (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+          const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
+        store.set('hcuRexDevice', id);
+      }
+      return id;
+    }
 
     function load() {
       fetch(api + 'scores?select=id,name,cups&order=cups.desc,created_at.asc&limit=10', { headers: headers })
@@ -1265,14 +1282,24 @@
       e.preventDefault();
       if (!pending) return;
       const name = el('pname').value.trim().slice(0, 16);
-      try { localStorage.setItem('hcuRexName', name); } catch (err) {}
-      const body = { p_name: name, p_cp: pending.progress, p_cups: pending.cups, p_duration: pending.dur };
+      const body = { p_device: deviceId(), p_name: name, p_cp: pending.progress, p_cups: pending.cups, p_duration: pending.dur };
+      const prevBest = parseInt(store.get('hcuRexSubmittedBest') || '0', 10) || 0;
       el('btnSubmit').disabled = true; el('submitMsg').textContent = 'Wird eingetragen …';
-      fetch(api + 'rpc/submit_score', { method: 'POST', headers: headers, body: JSON.stringify(body) })
+      fetch(api + 'rpc/submit_device_score', { method: 'POST', headers: headers, body: JSON.stringify(body) })
         .then(r => r.json().then(j => r.ok ? j : Promise.reject(j && j.message)))
-        .then(id => { pending = null; lastId = id; el('submitMsg').textContent = 'Eingetragen!'; })
+        .then(res => {
+          lastId = res.id;
+          store.set('hcuRexLockedName', res.name); el('pname').value = res.name; el('pname').readOnly = true;
+          if (pending.cups > prevBest) store.set('hcuRexSubmittedBest', String(pending.cups));
+          el('submitMsg').textContent = pending.cups > prevBest ? 'Eingetragen!' : 'Dein bestes Ergebnis steht schon drin.';
+          pending = null;
+        })
         .then(load)
-        .catch(msg => { el('btnSubmit').disabled = false; el('submitMsg').textContent = 'Hat nicht geklappt' + (msg ? ' (' + msg + ')' : '') + '. Versuch es gleich nochmal.'; });
+        .catch(msg => {
+          el('btnSubmit').disabled = false;
+          el('submitMsg').textContent = msg === 'Name schon vergeben' ? 'Den Namen gibt es schon, nimm einen anderen.'
+            : 'Hat nicht geklappt' + (msg ? ' (' + msg + ')' : '') + '. Versuch es gleich nochmal.';
+        });
     });
 
     if (ok) { el('board').hidden = false; load(); }
