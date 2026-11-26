@@ -802,7 +802,7 @@
     return Math.max(3, Math.ceil(n / 8));
   }
   function trayPos() {
-    if (isDucking()) return { x: dino.x + 28 * P, y: GROUND - 6 * P };
+    if (isDucking()) return { x: dino.x + 28 * P, y: GROUND - 2 * P };   // beim Ducken fast am Boden: unter einem Kopfhöhen-Schild passen 2 Lagen
     return { x: dino.x + 18 * P, y: GROUND - dino.alt - 9 * P };
   }
   function traySlot(i) {
