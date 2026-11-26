@@ -83,7 +83,7 @@
   // ---------- Grundeinstellungen ----------
   const H = 240, GROUND = 204, LINE = GROUND - 2, P = 2;
   let W = 800, TOP = 0;   // TOP < 0: zusätzliche Wandfläche oben (Handy hochkant)   // sichtbare Breite der Spielwelt – passt sich an die Fensterbreite an
-  const GRAVITY = 0.62, JUMP_V = 11, START_SPEED = 6, MAX_SPEED = 14;
+  const GRAVITY = 0.62, JUMP_V = 11, START_SPEED = 6.6, MAX_SPEED = 15.2;
   const C = { ink: '#535353', accent: '#c4561d', wall: '#f7f7f5', joint: '#eeeeeb', hole: '#e6e6e2' };
   const FONT = '"Courier New", Courier, monospace';
 
@@ -706,7 +706,7 @@
   // Tempo steigt bis zur Professur stetig an, danach bleibt es konstant
   // Abschnittsweise linear: Bachelor ruhig, ab der Promotion zieht das Tempo deutlich an
   function phase(s) { return s >= plan.PROF ? 4 : s >= plan.D ? 3 : s >= plan.M ? 2 : s >= plan.B ? 1 : 0; }
-  const SPEED_AT = [START_SPEED, 9, 10.5, 13, MAX_SPEED];   // Tempo am Beginn von Bachelor, Master, Promotion, Postdoc, Professur
+  const SPEED_AT = [START_SPEED, 9.8, 11.4, 14.1, MAX_SPEED];   // Tempo am Beginn von Bachelor, Master, Promotion, Postdoc, Professur
   function speedFor(s) {
     const p = phase(s);
     if (p === 4) return MAX_SPEED;
