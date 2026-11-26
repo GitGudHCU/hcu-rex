@@ -1,0 +1,4 @@
+# Netlify: keine Build-Schritte, die Seite ist einfach index.html
+[build]
+  publish = "."
+  command = ""

@@ -1,0 +1,1281 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HCU-Rex</title>
+<style>
+  html { background: #fff; }
+  body { margin: 0; padding: 0; background: #fff; color: #535353; font-family: "Courier New", Courier, monospace; }
+  #wrap { width: 100%; margin: 0 auto; padding: 8px; box-sizing: border-box; }
+  #controls { max-width: 900px; margin-left: auto; margin-right: auto; }
+  #game { width: 100%; display: block; outline: none; touch-action: manipulation; cursor: pointer;
+          border: 1px solid #e4e4e4; border-radius: 6px; image-rendering: pixelated; -webkit-tap-highlight-color: transparent; }
+  #controls { display: flex; gap: 8px; margin-top: 8px; }
+  #controls button { flex: 1; padding: 10px; font: bold 15px "Courier New", monospace; border: 2px solid #535353;
+          background: #fff; color: #535353; border-radius: 6px; cursor: pointer;
+          user-select: none; -webkit-user-select: none; touch-action: none; -webkit-tap-highlight-color: transparent; }
+  #controls button:active, #controls button.on { background: #535353; color: #fff; }
+  #hint { font-size: 12px; color: #888; text-align: center; margin-top: 6px; }
+  #board { max-width: 900px; margin: 18px auto 24px; color: #535353; }
+  #board h2 { font-size: 15px; margin: 0 0 8px; letter-spacing: 0.5px; }
+  #submitForm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px; margin-bottom: 12px;
+          border: 2px solid #c4561d; border-radius: 6px; }
+  #submitForm .res { flex-basis: 100%; font-weight: bold; color: #c4561d; }
+  #pname { flex: 1; min-width: 0; padding: 8px; font: 15px "Courier New", monospace; border: 2px solid #535353; border-radius: 6px; color: #535353; background: #fff; }
+  #board button { padding: 8px 12px; font: bold 14px "Courier New", monospace; border: 2px solid #535353; background: #fff; color: #535353; border-radius: 6px; cursor: pointer; }
+  #board button.on, #btnSubmit { background: #535353 !important; color: #fff !important; }
+  #board button:disabled { opacity: 0.5; cursor: default; }
+  #submitMsg { flex-basis: 100%; font-size: 13px; }
+  .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+  #list { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+  #list li { display: grid; grid-template-columns: 2.2em 1fr auto; gap: 8px; padding: 5px 2px; border-bottom: 1px solid #eee; font-variant-numeric: tabular-nums; }
+  #list li .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #list li .v { font-weight: bold; }
+  #list li.me { color: #c4561d; }
+  #list .empty { display: block; color: #888; border: 0; }
+  .note { font-size: 11px; color: #888; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="game" tabindex="0" aria-label="HCU-Rex: Springe über Mülleimer, ducke dich unter Fluchtwegschildern"></canvas>
+  <div id="controls">
+    <button id="btnDuck" type="button">▼ Ducken</button>
+    <button id="btnJump" type="button">▲ Springen</button>
+  </div>
+  <div id="hint">Leertaste / ↑ = Springen · ↓ = Ducken · Antippen geht auch</div>
+  <section id="board" hidden>
+    <form id="submitForm" hidden>
+      <div class="res" id="resText"></div>
+      <input id="pname" maxlength="16" placeholder="Name (optional)" autocomplete="nickname" aria-label="Name für die Bestenliste (optional)">
+      <button id="btnSubmit" type="submit">Eintragen</button>
+      <div id="submitMsg" role="status"></div>
+    </form>
+    <h2>HCU-BESTENLISTE</h2>
+    <div class="tabs">
+      <button type="button" data-k="cp" class="on">Meiste CP</button>
+      <button type="button" data-k="cups">Meiste Tassen</button>
+    </div>
+    <ol id="list"></ol>
+    <p class="note">Gespeichert werden nur Name, CP, Tassen, Spieldauer und Zeitpunkt. Ohne Namen erscheinst du als „anonym“.</p>
+  </section>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Bestenliste: Zugangsdaten aus Supabase (Project Settings → API) ----------
+  const SUPABASE_URL = 'https://qcucjruzjkkrngzzqypd.supabase.co';   // z. B. 'https://abcdefgh.supabase.co'
+  const SUPABASE_KEY = 'sb_publishable_sWdyBBKDICTwMe860KWCVw_OTugQBES';   // der öffentliche "anon"/"publishable" Key, nicht der geheime service_role Key
+
+  // ---------- Grundeinstellungen ----------
+  const H = 240, GROUND = 204, LINE = GROUND - 2, P = 2;
+  let W = 800;   // sichtbare Breite der Spielwelt – passt sich an die Fensterbreite an
+  const GRAVITY = 0.62, JUMP_V = 11, START_SPEED = 6, MAX_SPEED = 14;
+  const YEAR = 40;   // CP-Strecke pro Jahr (Promotion, Postdoc, Professur)
+  const C = { ink: '#535353', accent: '#c4561d', wall: '#f7f7f5', joint: '#eeeeeb', hole: '#e6e6e2' };
+  const FONT = '"Courier New", Courier, monospace';
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  // Das Spielfeld nutzt die ganze verfügbare Breite. Auf breiten Bildschirmen wird
+  // mehr vom Flur sichtbar, die Pixel wachsen nur maßvoll mit. Die Höhe bleibt so,
+  // dass Spielfeld und Knöpfe ins Fenster bzw. in den Moodle-Rahmen passen.
+  function resize() {
+    const cw = Math.max(280, canvas.clientWidth || canvas.parentElement.clientWidth);
+    const vh = window.innerHeight || 600;
+    // Handy: ca. 600 Einheiten breit, Desktop: mindestens 900, sehr breit: Pixel bis 2,4-fach
+    let w = cw >= 900 ? Math.max(900, cw / 2.4) : 600 + Math.max(0, cw - 360) / 540 * 300;
+    w = Math.max(w, cw * H / Math.max(120, vh - 110));   // nicht höher als das Fenster
+    W = Math.round(w);
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const ch = cw * H / W;
+    canvas.style.aspectRatio = W + ' / ' + H;
+    canvas.width = Math.round(cw * dpr);
+    canvas.height = Math.round(ch * dpr);
+    ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+  if (window.ResizeObserver) new ResizeObserver(resize).observe(document.getElementById('wrap'));
+
+  // ---------- Pixel-Helfer ----------
+  const snap = v => Math.round(v / P) * P;
+  function rect(x, y, w, h, c) { ctx.fillStyle = c; ctx.fillRect(snap(x), snap(y), w, h); }
+  // Sprite aus Textzeilen; jedes Zeichen = ein 2×2-Pixel, '.' = transparent
+  function pix(rows, x, y, pal) {
+    x = snap(x); y = snap(y);
+    for (let r = 0; r < rows.length; r++) {
+      const row = rows[r];
+      for (let c = 0; c < row.length; c++) {
+        const col = pal[row[c]];
+        if (!col) continue;
+        ctx.fillStyle = col;
+        ctx.fillRect(x + c * P, y + r * P, P, P);
+      }
+    }
+  }
+  const rand = (a, b) => a + Math.random() * (b - a);
+  const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+  const pad = n => String(Math.floor(n)).padStart(3, '0');
+
+  // ---------- Sprites ----------
+  const DINO_PAL = { '#': C.ink, 'w': '#fff' };
+  const DINO_BLINK = { '#': C.ink, 'w': C.ink };
+  const BODY = [
+    '..........########..',
+    '.........##w########',
+    '.........###########',
+    '.........###########',
+    '.........###########',
+    '.........#####......',
+    '.........########...',
+    '#.......#####.......',
+    '#.....#######.......',
+    '##...#########......',
+    '###.##########.#....',
+    '##############......',
+    '.############.......',
+    '..##########........',
+    '...########.........'
+  ];
+  const LEGS = {
+    stand: ['....###.##..........', '....##...#..........', '....#....#..........', '....##...##.........'],
+    run1:  ['....###.##..........', '....##...##.........', '....#...............', '....##..............'],
+    run2:  ['....###.##..........', '....##...#..........', '.........#..........', '.........##.........']
+  };
+  const DUCK = [
+    '#...................########',
+    '##....#########...##w#######',
+    '############################',
+    '.##################.########',
+    '..#################.#####...',
+    '...############.....######..'
+  ];
+  const DUCK_LEGS = [
+    ['....###.##..', '....##...#..', '....##...##.'],
+    ['....###.##..', '....#...##..', '....##......']
+  ];
+  const DEAD_EYE = ['#.#', '.#.', '#.#'];
+
+  // Tasse (5 × 4)
+  const MUG = ['gggg.', 'gwwgg', 'gwwgg', 'gggg.'];
+  const MUG_PAL = { g: '#959ba0', w: '#ffffff' };
+    const TRAY_PAL = { t: '#a9afb4', s: '#7f868c' };
+
+  // Mülleimer-Fach (8 × 15), L = Deckelfarbe
+  function binRows(knobLeft) {
+    return [
+      'gggggggg',
+      'gssssssg',
+      'gsLLLLsg',
+      'gsLLkLsg',
+      'gsLLLLsg',
+      'gssssssg',
+      'gggggggg',
+      'gbbbbbbg',
+      'gbbbbbbg',
+      knobLeft ? 'gkbbbbbg' : 'gbbbbbkg',
+      'gbbbbbbg',
+      'gbbbbbbg',
+      'gbbbbbbg',
+      'gbbbbbbg',
+      'gggggggg'
+    ];
+  }
+  const BIN_L = binRows(true), BIN_R = binRows(false);
+
+  // Schlafende:r Studi am Tisch (18 × 13)
+  const STUDENT = [
+    '......hhh.........',
+    '..sss.hhhh........',
+    '.sssshffhh........',
+    'sssssffffs........',
+    'sssssssssssf......',
+    'ssssss............',
+    'sssss.tttttttttttt',
+    'kkkpppppp.T.....T.',
+    '..k.....p.T.....T.',
+    '..k.....p.T.....T.',
+    '..k.....p.T.....T.',
+    '..k.....p.T.....T.',
+    '.kkk....bbT.....T.'
+  ];
+  const LAPTOP = ['...............L..', '...............L..', '...............L..', '...............L..', '...........LLLLL..'];
+  const MODEL  = ['..................', '.............mm...', '............mmmm..', '...........mmmmm..', '...........MMMMM..'];
+  const ZZ = ['zzzz', '..z.', '.z..', 'zzzz'];
+
+  // Fluchtwegschild (20 × 12): Leuchtengehäuse, LED-Streifen, grünes Schild mit Pfeil und Notausgang
+  const SIGN = [
+    'hhhhhhhhhhhhhhhhhhhh',
+    'hhhhhhhhhhhhhhhhhhhh',
+    'llllllllllllllllllll',
+    'gggggggggggggggggggg',
+    'ggggwggggggwwwwwwwgg',
+    'gggwwggggggwwwgwwwgg',
+    'ggwwwwwwwggwwggggwgg',
+    'gwwwwwwwwggwwwgwwwgg',
+    'ggwwwwwwwggwwgwgwwgg',
+    'gggwwggggggwgwwwgwgg',
+    'ggggwggggggwwwwwwwgg',
+    'gggggggggggggggggggg'
+  ];
+  const SIGN_PAL = { h: '#b9bfc4', l: '#e8f6ff', g: '#1d7a3e', w: '#ffffff' };
+  // Unterkante des Schilds über dem Boden: tief = drüberspringen, Kopfhöhe = ducken, hoch = einfach weiterlaufen
+  const SIGN_LOW = 6, SIGN_HEAD = 20, SIGN_HIGH = 42;
+
+  // Hüte – unterste Zeile sitzt direkt auf dem Kopf
+  const HAT1 = [
+    '....oo....',
+    'cccccccccc',
+    'o.cccccc..',
+    'o.........'
+  ];
+  const HAT2 = [
+    '.......oo.......',
+    'cccccccccccccccc',
+    'cccccccccccccccc',
+    'o...cccccccc....',
+    'o...cccccccc....',
+    'oo..............'
+  ];
+  // Doktorhüte: gleicher Hut, Verzierung je nach Studiengang (wird zufällig vergeben)
+  const HAT3_BASE = [
+    '.yyyyyyyyyyyyyyyyyyy.',
+    '.ccccccccccccccccccc.',
+    '.y....cccccccc.......',
+    '.y....cccccccc.......',
+    'yy...................'
+  ];
+  const PHD_DECOS = {
+    bau: [
+      '..........r..........',
+      '..........r..........',
+      '.........rrr.........',
+      '..........r..........',
+      '....wwwwwwwwwwwww....',
+      '....w.w...w...w.w....',
+      '....w..w.w.w.w..w....',
+      '....w...w...w...w....',
+      '....wwwwwwwwwwwww....',
+      '...kkk.......kkk.....'
+    ],
+    arch: [
+      '.....................',
+      '..........o..........',
+      '.........oWo.........',
+      '........oWWWo........',
+      '.......oWWWWWo.....p.',
+      '......oWWWWWWWo...p..',
+      '......oWgWWWgWo..p...',
+      '......oWWWWWWWo.p....',
+      '......oWWWkWWWon.....',
+      '......ooooooooo......'
+    ],
+    geo: [
+      '...s.................',
+      '..sss................',
+      '...s.....qqqq........',
+      '.........qkkqkk......',
+      '.........qqqq........',
+      '..........kk.........',
+      '.........w..w........',
+      '........w....w.......',
+      '.......w......w......',
+      '......w........w.....'
+    ],
+    stadt: [
+      '.........rrr.........',
+      '........rrrrr........',
+      '........rrWrr........',
+      '........rrrrr........',
+      '.........rrr.........',
+      '..x.......r..........',
+      '.xxx......r...ooo....',
+      '..w...oooo....oWo..x.',
+      '..w...oWWo.oo.oWo.xxx',
+      '..w...oWWo.oW.oWo..w.'
+    ],
+    kultur: [
+      '..ooooooo............',
+      '.oWWWWWWWo...........',
+      '.oWkWkWkWo....oooo...',
+      '.oWWWWWWWo....oggo...',
+      '..oooWooo.....oggo...',
+      '....oo........oggo...',
+      '.....o........oggo...',
+      '.....o........oggo...',
+      '.....o........oggo...',
+      '.....o........okko...'
+    ],
+    tga: [
+      '..........zz.........',
+      '.........zz..........',
+      '........zzzz.........',
+      '..........zz.........',
+      '.........zz..........',
+      '..PP.....vvv.........',
+      '..PP.....v.v.........',
+      '..PPPPPPPPvPPPPPPPP..',
+      '..PPPPPPPPPPPPPPPPP..',
+      '...............PP....'
+    ],
+    reap: [
+      '...................x.',
+      '..................xx.',
+      '....o............xxx.',
+      '....o...........xx...',
+      '....o.....bbbbbbbb...',
+      '....o....bbbbbbbb....',
+      '....o...bbbbbbbb.....',
+      '....o.....o....o.....',
+      '....o.....o....o.....',
+      '...ooo....o....o.....'
+    ],
+    ud: [
+      '.....................',
+      '..LLL......xxx.......',
+      '...o......xxxxx......',
+      '...o.......xxx.......',
+      '...o........w........',
+      '...o........w....k...',
+      '...o........w...kkk..',
+      '...o..wwwww.w....k...',
+      '...o..w...w.w...k.k..',
+      '..ooo.......w........'
+    ],
+  };
+  const PHD_KEYS = Object.keys(PHD_DECOS);
+  const DECO_PAL = { o: '#5a5a5a', W: '#ffffff', g: '#9fc3d6', k: '#2f2f2f', w: '#9c7a4f', r: '#d0342c', p: '#f4c430', n: '#535353', q: '#e8a33d',
+    s: '#8a9197', x: '#3f9b4f', z: '#f2c400', v: '#c0392b', P: '#9aa3ab', b: '#2e4a7a', L: '#f2d04a' };
+  const ROTOR_A = ['.o...o.', '..o.o..', '...o...'], ROTOR_B = ['...o...', '...o...', '..ooo..'];
+  const HAT_PAL = { c: '#1f1f1f', o: C.accent, y: '#d4a017', w: '#9c7a4f', r: '#d0342c', k: '#3c3c3c' };
+  const GEAR_A = ['.g.g.', 'ggggg', '.gkg.', 'ggggg', '.g.g.'];
+  const GEAR_B = ['g.g.g', '.ggg.', 'ggkgg', '.ggg.', 'g.g.g'];
+  const GEAR_PAL = { g: '#c9a227', k: '#5a4a10' };
+
+  // Modelle und Bauteile für die Metallregale: Hamburger Gebäude, Stadtmodelle, Stahlbau u. a.
+  const MODELS = [
+    [ // Elbphilharmonie
+      '..ooo...ooo...oo..',
+      '.ogggo.ogggoooggo.',
+      'oggggggggggggggggo',
+      'oggggggggggggggggo',
+      'oggggggggggggggggo',
+      'obbbbbbbbbbbbbbbbo',
+      'obobobobobobobobbo',
+      'obbbbbbbbbbbbbbbbo',
+      'oooooooooooooooooo'
+    ],
+    [ // Michel
+      '...o.........',
+      '...o.........',
+      '..oco........',
+      '..oco........',
+      '.occco.......',
+      '.occco.......',
+      '.owwwo.......',
+      '.owowo..ooo..',
+      '.owwwo.occco.',
+      'owwwwwoccccco',
+      'owwowwowwwwwo',
+      'owwwwwowowowo',
+      'owwowwowwwwwo',
+      'ooooooooooooo'
+    ],
+    [ // Rathaus
+      '........o........',
+      '.......oco.......',
+      '.......oco.......',
+      '......occco......',
+      '......owowo......',
+      '.ooooooowooooooo.',
+      'occcccccwccccccco',
+      'owwwwwwwwwwwwwwwo',
+      'owowowowwwowowowo',
+      'owwwwwwwwwwwwwwwo',
+      'owowowowowowowowo',
+      'ooooooooooooooooo'
+    ],
+    [ // Chilehaus
+      'ooooooooooo.....',
+      'obbbbbbbbbboo...',
+      'obobobobobobbo..',
+      'obbbbbbbbbbbbbo.',
+      'obobobobobobobbo',
+      'obbbbbbbbbbbbbbo',
+      'obobobobobobobbo',
+      'obbbbbbbbbbbbbbo',
+      'oooooooooooooooo'
+    ],
+    [ // Fernsehturm
+      '...o...',
+      '...o...',
+      '...o...',
+      '..owo..',
+      '..owo..',
+      '.owwwo.',
+      'owwwwwo',
+      'ooooooo',
+      '.owwwo.',
+      '..owo..',
+      '..owo..',
+      '..owo..',
+      '..owo..',
+      '..owo..',
+      '..owo..',
+      '..owo..',
+      '..owo..',
+      '..owo..',
+      '..owo..',
+      '..owo..',
+      '.owwwo.',
+      'ooooooo'
+    ],
+    [ // Speicherstadt
+      '.....oo.....',
+      '....obbo....',
+      '...obbbbo...',
+      '..obbbbbbo..',
+      '.obbbbbbbbo.',
+      'obbbbbbbbbbo',
+      'obwbbwbbwbbo',
+      'obbbbbbbbbbo',
+      'obwbbwbbwbbo',
+      'obbbbbbbbbbo',
+      'obwbbwbbwbbo',
+      'oooooooooooo'
+    ],
+    [ // Tanzende Türme
+      'ooooo....oooo',
+      'owwwo...owwwo',
+      '.owwwo..owwwo',
+      '.owgwo.owgwo.',
+      '..owwwoowwwo.',
+      '..owgwoowgwo.',
+      '.owwwo.owwwo.',
+      '.owgwo..owgwo',
+      'owwwo...owwwo',
+      'owgwo...owgwo',
+      '.owwwo..owwwo',
+      '.owgwo.owgwo.',
+      '..owwwoowwwo.',
+      '..oooooooooo.'
+    ],
+    [ // Köhlbrandbrücke
+      '.......o..........o.........',
+      '......ooo........ooo........',
+      '.....o.o.o......o.o.o.......',
+      '....o..o..o....o..o..o......',
+      '...o...o...o..o...o...o.....',
+      'oooooooooooooooooooooooooooo',
+      '.......o..........o.........',
+      '.......o..........o.........',
+      '.......o..........o.........',
+      'oooooooooooooooooooooooooooo'
+    ],
+    [ // Hafenkran
+      'oooooooooooooooo',
+      '.o.o.o.o.o.o.o.o',
+      'oooooooooooooooo',
+      '......owwwo....o',
+      '......owgwo....o',
+      '......ooooo...oo',
+      '.......o.o......',
+      '......o...o.....',
+      '.....o.....o....',
+      '....o.......o...',
+      '...ooooooooooo..',
+      '...o.........o..',
+      '...o.........o..',
+      '..ooo.......ooo.'
+    ],
+    [ // Planetarium
+      '....ooo....',
+      '...occco...',
+      '..occccco..',
+      '.ooooooooo.',
+      '.owwwwwwwo.',
+      '.owgwwwgwo.',
+      '.owwwwwwwo.',
+      '..owwwwwo..',
+      '..obbbbbo..',
+      '..obwbwbo..',
+      '..obbbbbo..',
+      '..obwbwbo..',
+      '..obbbbbo..',
+      '.obbbbbbbo.',
+      'ooooooooooo'
+    ],
+    [ // St. Nikolai
+      '....o....',
+      '....o....',
+      '...oco...',
+      '...oco...',
+      '...oco...',
+      '..occco..',
+      '..occco..',
+      '..occco..',
+      '..owwwo..',
+      '..owowo..',
+      '..owwwo..',
+      '..owwwo..',
+      '.obbbbbo.',
+      '.obwbwbo.',
+      '.obbbbbo.',
+      '.obwbwbo.',
+      'obbbbbbbo',
+      'ooooooooo'
+    ],
+    [ // Dockland
+      '....oooooooooooooo',
+      '....ogggggggggggo.',
+      '...ogggggggggggo..',
+      '...ogggggggggggo..',
+      '..ogggggggggggo...',
+      '..ogggggggggggo...',
+      '.ogggggggggggo....',
+      '.ogggggggggggo....',
+      'oooooooooooooo....'
+    ],
+    [ // Rickmer Rickmers
+      '......o.....o.....o.....',
+      '.....ooo...ooo...ooo....',
+      '......o.....o.....o.....',
+      '....owwwo.owwwo.owwwo...',
+      '....owwwo.owwwo.owwwo...',
+      '....ooooo.ooooo.ooooo...',
+      '......o.....o.....o.....',
+      'oooooooooooooooooooooooo',
+      '.occcccccccccccccccccco.',
+      '..occcccccccccccccccco..',
+      '...oooooooooooooooooo...'
+    ],
+    [ // Stadtmodell (Hochhäuser)
+      '.....oo..............oo...',
+      '.....ww..............ww...',
+      '.ooo.ww...oooo..ooo..ww.o.',
+      '.www.ww...wwww..www..ww.w.',
+      '.www.ww.o.wwww..www.oww.w.',
+      '.www.ww.w.wwww.owwwowww.w.',
+      'TTTTTTTTTTTTTTTTTTTTTTTTTT',
+      'yyyyyyyyyyyyyyyyyyyyyyyyyy'
+    ],
+    [ // Stadtmodell (Holz, Giebel)
+      '..o.....o.....o.....o...',
+      '.ooo...ooo...ooo...ooo..',
+      'ooooo.ooooo.ooooo.ooooo.',
+      'oyyyo.oyyyo.oyyyo.oyyyo.',
+      'oyyyo.oyyyo.oyyyo.oyyyo.',
+      'TTTTTTTTTTTTTTTTTTTTTTTT'
+    ],
+    [ // I-Profil
+      'SSSSSSSS',
+      '...SS...',
+      '...SS...',
+      '...SS...',
+      '...SS...',
+      '...SS...',
+      '...SS...',
+      '...SS...',
+      '...SS...',
+      'SSSSSSSS'
+    ],
+    [ // Trägerstapel
+      'SSSSSSSSSSSSSSSSSSSSSSSSSS',
+      'ssssssssssssssssssssssssss',
+      'SSSSSSSSSSSSSSSSSSSSSSSSSS',
+      '...YY..............YY.....',
+      'SSSSSSSSSSSSSSSSSSSSSSSSSS',
+      'ssssssssssssssssssssssssss',
+      'SSSSSSSSSSSSSSSSSSSSSSSSSS',
+      '...YY..............YY.....'
+    ],
+    [ // Stahlknoten
+      '....SsS.......',
+      '....SsS.......',
+      '....SsS.......',
+      '....SsSSSSSSSS',
+      '....SsSsdsdsss',
+      '....SsSsdsdsss',
+      '....SsSSSSSSSS',
+      '....SsS.......',
+      '....SsS.......',
+      '....SsS.......',
+      '....SsS.......',
+      '..SSSSSSSSS...'
+    ],
+    [ // Fachwerkträger
+      '...YYYYYYYYYYYYYYYYYYYY...',
+      '..Y.Y...Y.Y...Y.Y...Y.Y...',
+      '.Y...Y.Y...Y.Y...Y.Y...Y..',
+      'YYYYYYYYYYYYYYYYYYYYYYYYYY',
+      '.o......................o.',
+      'ooo....................ooo'
+    ],
+    [ // Geländemodell
+      '.........TTTT...........',
+      '.......TTyyyyTT.........',
+      '.....TTyyyyyyyyTTT......',
+      '...TTyyyyyyyyyyyyyTTT...',
+      '.TTyyyyyyyyyyyyyyyyyyTT.',
+      'TyyyyyyyyyyyyyyyyyyyyyyT',
+      'TTTTTTTTTTTTTTTTTTTTTTTT'
+    ],
+    [ // Bauhelm
+      '...kkkk...',
+      '..kkkkkk..',
+      '.kkkkkkkk.',
+      '.kkkkkkkk.',
+      'kkkkkkkkkk'
+    ],
+    [ // Betonwürfel
+      '...oooooo.....',
+      '...oBBBBo.....',
+      '...oBBBBo.....',
+      'oooooooooooo..',
+      'oBBBBooBBBBo..',
+      'oBBBBooBBBBo..',
+      'oooooooooooo..'
+    ],
+  ];
+  const MODEL_PAL = { o: '#d2d2ce', w: '#fdfdfc', g: '#e6eef1', b: '#efdcd2', c: '#d6e8df', s: '#d9dee2', S: '#bfc6cc', d: '#a9b0b6',
+    y: '#f3e9d8', Y: '#e0cdab', T: '#e5d8c0', B: '#e3e3e0', k: '#f2da8c' };
+
+  // ---------- Spielzustand ----------
+  const SHIRTS = ['#3d6fb6', '#c0392b', '#2f8f5b', '#8e44ad', '#e09b2d', '#4a4a4a', '#17a2a2'];
+  const HAIR = ['#2b1d14', '#5a3a1e', '#b07a3c', '#e3c27a', '#1c1c1c', '#8a2f1a'];
+  const SKIN = ['#f1c9a5', '#d9a07a', '#a8714f', '#7a4e33', '#f6d7bd'];
+  const PANTS = ['#2e3b55', '#3b3b3b', '#5b4636', '#4b5d6b'];
+  const CUP_WEIGHTS = [30, 24, 18, 12, 8, 5, 3];   // Wahrscheinlichkeit für 0, 1, 2 … 6 Tassen
+
+  function loadBest() { try { return parseInt(localStorage.getItem('hcuRexBest') || '0', 10) || 0; } catch (e) { return 0; } }
+  function saveBest(v) { try { localStorage.setItem('hcuRexBest', String(v)); } catch (e) { /* in manchen Moodle-Iframes gesperrt */ } }
+
+  let state = 'ready', speed = 0, dist = 0, score = 0, best = loadBest();
+  let obstacles = [], bg = [], floorBits = [], particles = [], flies = [];
+  let spawnGap = 0, pendingGroup = null, flash = null, sub = null, hatFall = null, overAt = 0, frame = 0;
+  let wallOff = 0, carried = 0, returned = 0, startedAt = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
+  const dino = { x: 50, alt: 0, v: 0, jumping: false, duckHeld: false };
+
+  // ---------- Laufbahn: wird bei jedem Start neu ausgewürfelt ----------
+  // Bachelor 6–8 Semester, Master 4–6 Semester, Promotion 3–5 Jahre,
+  // danach 5 Jahre Postdoc, dann Professur (unbegrenzt)
+  const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+  let plan, msList, msIdx;
+  // Bachelor immer 180 CP, Master immer 120 CP (zusammen 300 CP) – egal wie viele
+  // Semester. Die CP werden gleichmäßig auf ganze Zahlen verteilt, der Rest geht an
+  // die ersten Semester (z. B. 7 Semester: 5 × 26 + 2 × 25 = 180).
+  function splitCP(total, n) {
+    const base = Math.floor(total / n), rest = total - base * n, ends = [];
+    let sum = 0;
+    for (let i = 0; i < n; i++) { sum += base + (i < rest ? 1 : 0); ends.push(sum); }
+    return ends;
+  }
+  function newPlan() {
+    const bs = randInt(6, 8), mstr = randInt(4, 6), py = randInt(3, 5);
+    const B = 180, M = 300, D = M + py * YEAR, PROF = D + 5 * YEAR;
+    const bEnds = splitCP(180, bs), mEnds = splitCP(120, mstr).map(e => B + e);
+    plan = { B: B, M: M, D: D, PROF: PROF, bEnds: bEnds, mEnds: mEnds, phd: pick(PHD_KEYS) };
+    msList = [];
+    bEnds.forEach((at, i) => msList.push({ at: at, t: i < bs - 1 ? (i + 1) + '. Semester bestanden!' : 'Bachelor geschafft!', big: i === bs - 1 }));
+    mEnds.forEach((at, i) => msList.push({ at: at, t: i < mstr - 1 ? (i + 1) + '. Mastersemester bestanden!' : 'Master geschafft!', big: i === mstr - 1 }));
+    for (let i = 1; i <= py; i++) msList.push({ at: M + i * YEAR, t: i < py ? i + '. Promotionsjahr geschafft!' : 'Promotion geschafft!', big: i === py });
+    for (let i = 1; i <= 5; i++) msList.push({ at: D + i * YEAR, t: i < 5 ? i + '. Postdoc-Jahr geschafft!' : 'Professur! Verbeamtet auf Lebenszeit.', big: i === 5 });
+    msIdx = 0;
+  }
+  // Nummer des laufenden Semesters anhand der Semestergrenzen
+  const semNo = (ends, s) => { let i = 0; while (i < ends.length - 1 && s >= ends[i]) i++; return i + 1; };
+  function nextMs() {
+    if (msIdx >= msList.length) {   // als Professor:in geht es unbegrenzt weiter
+      const n = msIdx - msList.length + 1;
+      return { at: plan.PROF + n * YEAR, t: n + '. Dienstjahr als Professor geschafft!', big: false };
+    }
+    return msList[msIdx];
+  }
+  newPlan();
+
+  function stageLabel(s) {
+    if (s < plan.B) return semNo(plan.bEnds, s) + '. Semester · Bachelor';
+    if (s < plan.M) return semNo(plan.mEnds, s) + '. Semester · Master';
+    if (s < plan.D) return (Math.floor((s - plan.M) / YEAR) + 1) + '. Jahr · Promotion';
+    if (s < plan.PROF) return (Math.floor((s - plan.D) / YEAR) + 1) + '. Jahr · Postdoc';
+    return 'Prof. Dr. Rex · ' + (Math.floor((s - plan.PROF) / YEAR) + 1) + '. Dienstjahr';
+  }
+  function reachedLabel(s) {
+    if (s < plan.B) return 'bis ins ' + semNo(plan.bEnds, s) + '. Bachelorsemester';
+    if (s < plan.M) return 'bis ins ' + semNo(plan.mEnds, s) + '. Mastersemester';
+    if (s < plan.D) return 'bis ins ' + (Math.floor((s - plan.M) / YEAR) + 1) + '. Promotionsjahr';
+    if (s < plan.PROF) return 'bis ins ' + (Math.floor((s - plan.D) / YEAR) + 1) + '. Postdoc-Jahr';
+    return 'bis zur Professur – im ' + (Math.floor((s - plan.PROF) / YEAR) + 1) + '. Dienstjahr';
+  }
+  function hatLevel(s) { return s >= plan.D ? 3 : s >= plan.M ? 2 : s >= plan.B ? 1 : 0; }
+  // Tempo steigt bis zur Professur stetig an, danach bleibt es konstant
+  // Abschnittsweise linear: Bachelor ruhig, ab der Promotion zieht das Tempo deutlich an
+  function phase(s) { return s >= plan.PROF ? 4 : s >= plan.D ? 3 : s >= plan.M ? 2 : s >= plan.B ? 1 : 0; }
+  const SPEED_AT = [START_SPEED, 9, 10.5, 13, MAX_SPEED];   // Tempo am Beginn von Bachelor, Master, Promotion, Postdoc, Professur
+  function speedFor(s) {
+    const p = phase(s);
+    if (p === 4) return MAX_SPEED;
+    const a = [0, plan.B, plan.M, plan.D, plan.PROF][p], b = [plan.B, plan.M, plan.D, plan.PROF][p];
+    return SPEED_AT[p] + (SPEED_AT[p + 1] - SPEED_AT[p]) * (s - a) / (b - a);
+  }
+  // Je Laufbahnstufe: Anteil Schilder-Ketten und Spielraum der Hindernisabstände
+  const CHAIN_P = [0, 0.2, 0.4, 0.45, 0.5];
+  const GAP_RAND = [300, 260, 170, 150, 150];
+
+  function makeBg(type, x) {
+    const w = { door: 56, hydrant: 40, shelf: 68, cafe: 124 }[type];
+    const o = { type: type, x: x, w: w, served: 0, done: false };
+    if (type === 'shelf') o.items = fillShelf();
+    return o;
+  }
+  // Frei stehendes Metallregal mit 3 Böden; darauf nur 1–2 Modelle
+  function fillShelf() {
+    const n = Math.random() < 0.5 ? 1 : 2;
+    const boards = [0, 1, 2].sort(() => Math.random() - 0.5).slice(0, n);
+    const models = MODELS.slice().sort(() => Math.random() - 0.5).slice(0, n);
+    return models.map((m, i) => ({ m: m, board: boards[i], u: 2 + Math.floor(Math.random() * (31 - m[0].length)) }));
+  }
+  function addFloorBit(x) {
+    const r = Math.random();
+    floorBits.push({ x: x, type: r < 0.05 ? 'pencil' : r < 0.09 ? 'paper' : 'dot', o: Math.floor(rand(0, 4)) * P, w: Math.floor(rand(1, 3)) * P });
+  }
+  bg.push(makeBg('shelf', 520));
+  for (let x = 0; x < W + 40; x += rand(20, 70)) addFloorBit(x);
+
+  // ---------- Hindernisse ----------
+  function weightedCups() {
+    const total = CUP_WEIGHTS.reduce((a, b) => a + b, 0);
+    let r = Math.random() * total;
+    for (let i = 0; i < CUP_WEIGHTS.length; i++) { r -= CUP_WEIGHTS[i]; if (r < 0) return i; }
+    return 0;
+  }
+  function makeSign(off) {   // hängt an zwei Stangen von der Decke, Unterkante off über dem Boden
+    return { type: 'sign', w: 20 * P, h: 12 * P, y: GROUND - off - 12 * P };
+  }
+  function makeObstacle() {
+    // Schlafende Studis: im Schnitt jedes 5. Hindernis
+    let t;
+    if (Math.random() < 0.2) t = (score >= 60 && Math.random() < 0.33) ? 'students' : 'student';
+    else t = (score >= 20 && Math.random() < 0.4) ? 'sign' : 'bin';
+    if (t === 'bin') {
+      const n = score < 15 ? 2 : pick([2, 3, 3]);
+      const lids = n === 3 ? ['#2b2b2b', '#22408f', '#f2c400'] : pick([['#2b2b2b', '#22408f'], ['#22408f', '#f2c400'], ['#2b2b2b', '#f2c400']]);
+      const k = weightedCups(), perRow = n === 3 ? 4 : 3, cups = [];
+      for (let i = 0; i < k; i++) cups.push({ ux: (i % perRow) * 6, tier: Math.floor(i / perRow) });
+      return { type: 'bin', n: n, lids: lids, w: n * 8 * P, h: 15 * P, y: GROUND - 15 * P, cups: cups, collected: false };
+    }
+    if (t === 'student' || t === 'students') {
+      const people = [];
+      for (let i = 0; i < (t === 'students' ? 2 : 1); i++) {
+        people.push({ s: pick(SHIRTS), h: pick(HAIR), f: pick(SKIN), p: pick(PANTS), prop: Math.random() < 0.5 ? LAPTOP : MODEL, zz: Math.floor(rand(0, 60)) });
+      }
+      return { type: 'student', people: people, w: people.length * 36, h: 13 * P, y: GROUND - 13 * P };
+    }
+    return makeSign(pick([SIGN_LOW, SIGN_HEAD, SIGN_HEAD, SIGN_HIGH]));
+  }
+  // Eine Gruppe von Hindernissen. Ab dem Master kommen Schilder-Ketten auf Kopfhöhe,
+  // ab der Promotion öfter und länger: das nächste Schild hängt genau dort, wo man
+  // nach einem Sprung wieder herunterfällt – drüberspringen klappt nicht, ducken schon.
+  function makeGroup() {
+    const p = phase(score);
+    if (Math.random() < CHAIN_P[p]) {
+      const n = p >= 2 ? pick([2, 3, 3, 4]) : pick([2, 2, 3]), gap = Math.round(23 * speed);
+      const items = [];
+      for (let i = 0; i < n; i++) items.push({ o: makeSign(SIGN_HEAD), dx: i * gap });
+      return { items: items, span: (n - 1) * gap + 40 };
+    }
+    const o = makeObstacle();
+    return { items: [{ o: o, dx: 0 }], span: o.w };
+  }
+
+  function obstacleBoxes(o) {
+    if (o.type === 'bin') return [{ x: o.x + 3, y: GROUND - 30 + 3, w: o.w - 6, h: 27 }];
+    if (o.type === 'student') return o.people.map((p, i) => ({ x: o.x + i * 36 + 3, y: GROUND - 24, w: 30, h: 24 }));
+    return [{ x: o.x + 2, y: o.y + 2, w: o.w - 4, h: o.h - 4 }];   // nur das Schild, die Stangen nicht
+  }
+  function dinoBoxes() {
+    if (isDucking()) {
+      const top = GROUND - dino.alt - 9 * P;
+      return [{ x: dino.x + 2 * P, y: top + P, w: 25 * P, h: 6 * P }];
+    }
+    const top = GROUND - dino.alt - 19 * P;
+    return [
+      { x: dino.x + 9 * P, y: top + P, w: 10 * P, h: 6 * P },
+      { x: dino.x + 1 * P, y: top + 7 * P, w: 14 * P, h: 10 * P }
+    ];
+  }
+  function bgFree(x0, w) { return !bg.some(b => b.x - 16 < x0 + w && b.x + b.w + 16 > x0); }
+  function hit(a, b) { return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y; }
+  function isDucking() { return dino.duckHeld && !dino.jumping && state === 'play'; }
+
+  // Tablett: mindestens 3 Tassen nebeneinander, höchstens 8 Lagen hoch –
+  // bei mehr Tassen wird das Tablett einfach breiter
+  function trayCols() {
+    const n = carried + flies.filter(f => f.kind === 'tray').length;
+    return Math.max(3, Math.ceil(n / 8));
+  }
+  function trayPos() {
+    if (isDucking()) return { x: dino.x + 28 * P, y: GROUND - 6 * P };
+    return { x: dino.x + 18 * P, y: GROUND - dino.alt - 9 * P };
+  }
+  function traySlot(i) {
+    const t = trayPos();
+    const cols = trayCols();
+    return { x: t.x + P + (i % cols) * 6 * P, y: t.y - 4 * P - Math.floor(i / cols) * 4 * P };
+  }
+
+  // ---------- Steuerung ----------
+  function start() {
+    newPlan();
+    state = 'play'; speed = START_SPEED; dist = 0; score = 0; pendingGroup = null;
+    obstacles = []; particles = []; flies = []; flash = null; sub = null; hatFall = null;
+    bg = bg.filter(b => b.type !== 'cafe');
+    spawnGap = 380; carried = 0; returned = 0; startedAt = performance.now();
+    board.hideSubmit();
+    dino.alt = 0; dino.v = 0; dino.jumping = false;
+  }
+  function jump() { if (!dino.jumping) { dino.jumping = true; dino.v = JUMP_V; } }
+  function press() {
+    if (state === 'ready') { start(); jump(); }
+    else if (state === 'over') { if (performance.now() - overAt > 600) start(); }
+    else jump();
+  }
+  function duckDown() { dino.duckHeld = true; }
+  function duckUp() { dino.duckHeld = false; }
+
+  window.addEventListener('keydown', function (e) {
+    const k = e.code || e.key;
+    const tg = e.target && e.target.tagName;
+    if (tg === 'INPUT' || tg === 'BUTTON' || tg === 'TEXTAREA') return;   // beim Namen-Tippen nicht springen
+    if (k === 'Space' || k === ' ' || k === 'ArrowUp' || k === 'ArrowDown') e.preventDefault();
+    if ((k === 'Space' || k === ' ' || k === 'ArrowUp') && !e.repeat) press();
+    if (k === 'ArrowDown') duckDown();
+  });
+  window.addEventListener('keyup', function (e) { if ((e.code || e.key) === 'ArrowDown') duckUp(); });
+  canvas.addEventListener('pointerdown', function (e) {
+    e.preventDefault();
+    try { canvas.focus({ preventScroll: true }); } catch (err) { canvas.focus(); }
+    press();
+  });
+  const btnJump = document.getElementById('btnJump');
+  const btnDuck = document.getElementById('btnDuck');
+  btnJump.addEventListener('pointerdown', function (e) { e.preventDefault(); press(); try { canvas.focus({ preventScroll: true }); } catch (err) {} });
+  btnDuck.addEventListener('pointerdown', function (e) { e.preventDefault(); btnDuck.classList.add('on'); duckDown(); });
+  ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btnDuck.addEventListener(ev, function () { btnDuck.classList.remove('on'); duckUp(); }));
+
+  // ---------- Meilensteine & Café ----------
+  function milestone(m) {
+    const text = m.t;
+    if (m.big) confetti();
+    flash = { t: text, life: 150 };
+    if (!bg.some(b => b.type === 'cafe' && !b.done)) {
+      bg = bg.filter(b => b.x < W);   // noch nicht sichtbare Details weichen dem Café
+      const last = bg[bg.length - 1];
+      const obstEnd = obstacles.reduce((m, o) => Math.max(m, o.x + o.w + 20), 0);
+      bg.push(makeBg('cafe', Math.max(W + 10, last ? last.x + last.w + 40 : 0, obstEnd)));
+    }
+  }
+  function confetti() {
+    for (let i = 0; i < 70; i++) {
+      particles.push({ x: rand(0, W), y: rand(-40, 0), vx: rand(-1, 1), vy: rand(0.5, 2), c: pick(SHIRTS.concat(['#d4a017', C.accent])), life: rand(120, 200) });
+    }
+  }
+  function cafeSlot(cafe, i) { return { x: cafe.x + 4 + (i % 10) * 6 * P, y: LINE - 32 - 4 * P - Math.floor(i / 10) * 4 * P }; }
+
+  function gameOver() {
+    state = 'over';
+    overAt = performance.now();
+    score = Math.floor(score);
+    if (score > best) { best = score; saveBest(best); }
+    const lvl = hatLevel(score);
+    board.offer(score, (performance.now() - startedAt) / 1000);
+    if (lvl > 0) hatFall = { lvl: lvl, x: dino.x + 10 * P, y: GROUND - dino.alt - 19 * P, vx: -1.2, vy: -5, rest: false };
+  }
+
+  // ---------- Update ----------
+  function update(dt) {
+    frame += dt;
+    const sp = state === 'play' ? speed : 0;
+
+    // Hintergrund (Wand, Türen, Café) und Boden
+    wallOff = (wallOff + sp * dt) % 96;
+    bg.forEach(b => { b.x -= sp * dt; });
+    bg = bg.filter(b => b.x + b.w > -60);
+    const last = bg[bg.length - 1];
+    if (!last || last.x + last.w < W - 40) {
+      // Hintergrunddetails nur selten: große, zufällige Abstände
+      const r = Math.random();
+      bg.push(makeBg(r < 0.5 ? 'shelf' : r < 0.85 ? 'door' : 'hydrant', W + rand(500, 1100)));
+    }
+    floorBits.forEach(d => { d.x -= sp * dt; });
+    floorBits = floorBits.filter(d => d.x > -30);
+    let maxX = floorBits.length ? floorBits[floorBits.length - 1].x : 0;
+    while (maxX < W + 40) { maxX += rand(20, 70); addFloorBit(maxX); }
+
+    particles.forEach(p => { p.vy += 0.05 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; });
+    particles = particles.filter(p => p.life > 0 && p.y < H + 10);
+    if (hatFall && !hatFall.rest) {
+      hatFall.vy += 0.45 * dt; hatFall.x += hatFall.vx * dt; hatFall.y += hatFall.vy * dt;
+      if (hatFall.y >= GROUND) { hatFall.y = GROUND; hatFall.rest = true; }
+    }
+    if (flash) { flash.life -= dt; if (flash.life <= 0) flash = null; }
+    if (sub) { sub.life -= dt; if (sub.life <= 0) sub = null; }
+    flies.forEach(f => {
+      f.t += dt / f.dur;
+      if (f.t >= 1) { f.dead = true; if (f.kind === 'tray') carried++; else { f.cafe.served++; returned++; } }
+    });
+    flies = flies.filter(f => !f.dead);
+
+    if (state !== 'play') return;
+
+    speed = speedFor(score);
+    dist += speed * dt;
+    score = dist * 0.006;
+
+    if (dino.jumping) {
+      dino.alt += dino.v * dt;
+      dino.v -= GRAVITY * (dino.duckHeld ? 2.2 : 1) * dt;
+      if (dino.alt <= 0) { dino.alt = 0; dino.v = 0; dino.jumping = false; }
+    }
+
+    obstacles.forEach(o => { o.x -= speed * dt; });
+    obstacles = obstacles.filter(o => o.x + o.w > -20);
+    spawnGap -= speed * dt;
+    // Hindernisse nur dort, wo dahinter kein Hintergrunddetail ist – sonst kurz warten
+    if (spawnGap <= 0) {
+      if (!pendingGroup) pendingGroup = makeGroup();
+      if (bgFree(W + 10, pendingGroup.span)) {
+        pendingGroup.items.forEach(it => { it.o.x = W + 10 + it.dx; obstacles.push(it.o); });
+        spawnGap = 200 + Math.random() * GAP_RAND[phase(score)] + speed * 22 + (pendingGroup.span - pendingGroup.items[0].o.w);
+        pendingGroup = null;
+      }
+    }
+
+    const db = dinoBoxes();
+    for (const o of obstacles) {
+      for (const ob of obstacleBoxes(o)) {
+        for (const d of db) { if (hit(d, ob)) { gameOver(); return; } }
+      }
+    }
+
+    // Tassen beim Drüberspringen aufs Tablett
+    for (const o of obstacles) {
+      if (o.type === 'bin' && !o.collected && o.x + o.w / 2 < dino.x + 14 * P) {
+        o.collected = true;
+        o.cups.forEach((c, i) => {
+          flies.push({ kind: 'tray', fx: o.x + c.ux * P, fy: GROUND - 30 - 4 * P - c.tier * 4 * P, t: 0, dur: 14 + i * 3, idx: i });
+        });
+        o.cups = [];
+      }
+    }
+
+    // Am Semesterende: Tassen ans Café
+    for (const b of bg) {
+      if (b.type === 'cafe' && !b.done && b.x + b.w / 2 < dino.x + 30) {
+        b.done = true;
+        const n = carried;
+        for (let i = 0; i < n; i++) {
+          const s = traySlot(i);
+          flies.push({ kind: 'cafe', cafe: b, slot: b.served + i, fx: s.x, fy: s.y, t: 0, dur: 14 + (i % 20) * 2 });
+        }
+        carried = 0;
+        if (n) sub = { t: (n === 1 ? '1 Tasse' : n + ' Tassen') + ' zurückgebracht', life: 120 };
+      }
+    }
+
+    while (score >= nextMs().at) { milestone(nextMs()); msIdx++; }
+  }
+
+  // ---------- Zeichnen ----------
+  function drawWall() {
+    rect(0, 0, W, LINE, C.wall);
+    rect(0, 60, W, P, C.joint);
+    for (let x = -wallOff; x < W; x += 96) {
+      rect(x, 0, P, LINE, C.joint);
+      for (const ax of [24, 72]) for (const ay of [28, 96, 160]) rect(x + ax, ay, P, P, C.hole);
+    }
+  }
+
+  function drawBg(b) {
+    const x = snap(b.x);
+    if (b.type === 'shelf') {
+      drawShelf(b, x);
+    } else if (b.type === 'door') {
+      const top = LINE - 92;
+      rect(x, top, 40, 92, '#ececea');
+      rect(x + 2, top + 2, 36, 90, '#fbfbfa');
+      rect(x + 12, top + 12, 16, 20, '#eef3f4');
+      rect(x + 30, top + 48, 6, 2, '#d2d5d8'); rect(x + 32, top + 50, 2, 4, '#d2d5d8');
+      rect(x + 44, top + 30, 12, 8, '#fcfcfb'); rect(x + 46, top + 32, 8, 2, '#e0e0dc');
+    } else if (b.type === 'hydrant') {
+      rect(x, LINE - 72, 26, 46, '#ececea');
+      rect(x + 2, LINE - 70, 22, 42, '#fbfbfa');
+      rect(x + 4, LINE - 66, 18, 4, '#f3c6c0');
+      rect(x + 4, LINE - 50, 2, 6, '#d8dbdd');
+      rect(x + 28, LINE - 92, 10, 12, '#f3c6c0'); rect(x + 30, LINE - 88, 6, 4, '#fff');
+      rect(x + 28, LINE - 76, 10, 10, '#f3c6c0'); rect(x + 30, LINE - 74, 6, 6, '#fff');
+    } else drawCafe(b, x);
+  }
+
+  function drawShelf(b, x) {
+    const top = LINE - 100, metal = '#d3d8dc', hole = '#e8ebed', board = '#c9cfd4';
+    b.items.forEach(it => pix(it.m, x + it.u * P, LINE - 4 - it.board * 48 - it.m.length * P, MODEL_PAL));
+    [0, 1, 2].forEach(i => { rect(x, LINE - 4 - i * 48, 68, 2, board); rect(x + 4, LINE - 2 - i * 48, 60, 2, '#dfe3e6'); });
+    rect(x, top, 68, 2, board);
+    [x, x + 64].forEach(px => {
+      rect(px, top, 4, 100, metal);
+      for (let y = top + 6; y < LINE - 6; y += 8) rect(px + 1, y, 2, 2, hole);
+    });
+  }
+
+  function drawCafe(b, x) {
+    rect(x - 2, LINE - 86, 128, 86, '#edeae4');
+    rect(x, LINE - 84, 124, 84, '#f9f6f1');
+    // Regal
+    rect(x + 8, LINE - 60, 62, 2, '#eae0d1');
+    for (let i = 0; i < 5; i++) pix(MUG, x + 10 + i * 12, LINE - 68, { g: '#dfe2e4', w: '#fff' });
+    rect(x + 8, LINE - 46, 62, 2, '#eae0d1');
+    for (let i = 0; i < 4; i++) rect(x + 12 + i * 14, LINE - 54, 8, 8, ['#efe0cf', '#e8dccf', '#f2e7d0', '#ecdacf'][i]);
+    // Kaffeemaschine
+    rect(x + 80, LINE - 62, 30, 28, '#e3e5e7');
+    rect(x + 84, LINE - 58, 4, 4, '#f2cdc8'); rect(x + 90, LINE - 58, 4, 4, '#d3ebd6');
+    rect(x + 92, LINE - 48, 6, 6, '#d6d9dc');
+    // Theke
+    rect(x, LINE - 32, 124, 4, '#ece3d3');
+    rect(x + 2, LINE - 28, 120, 28, '#f6f1e8');
+    for (let i = 1; i < 10; i++) rect(x + 2 + i * 12, LINE - 26, 2, 26, '#efe7da');
+    // Schild
+    rect(x + 32, LINE - 110, 60, 18, '#edeae4');
+    rect(x + 34, LINE - 108, 56, 14, '#ffffff');
+    rect(x + 60, LINE - 92, 2, 6, '#edeae4');
+    ctx.fillStyle = '#bba98f'; ctx.font = 'bold 11px ' + FONT; ctx.textAlign = 'center';
+    ctx.fillText('CAFÉ', x + 62, LINE - 97);
+    // zurückgebrachte Tassen auf der Theke
+    for (let i = 0; i < b.served; i++) { const s = cafeSlot(b, i); pix(MUG, s.x, s.y, MUG_PAL); }
+  }
+
+  function drawGround() {
+    rect(0, LINE, W, H - LINE, '#ffffff');
+    rect(0, LINE, W, 1, C.ink);
+    floorBits.forEach(d => {
+      const x = d.x, y = GROUND + 2 + d.o;
+      if (d.type === 'dot') rect(x, y, d.w, P, '#b5b5b5');
+      else if (d.type === 'pencil') { rect(x, y, 4, 4, '#f2b5c4'); rect(x + 4, y, 16, 4, '#f4c430'); rect(x + 20, y, 4, 4, '#e8c39e'); rect(x + 24, y + 2, 2, 2, C.ink); }
+      else { rect(x, y, 8, 6, '#c4c4c4'); rect(x + 2, y + 2, 4, 2, '#fff'); }
+    });
+  }
+
+  function drawBin(o) {
+    for (let i = 0; i < o.n; i++) {
+      pix(i === 1 ? BIN_R : BIN_L, o.x + i * 8 * P, GROUND - 30, { g: '#959b9c', s: '#e9ebeb', b: '#dcdfdf', k: '#1a1a1a', L: o.lids[i] });
+    }
+    o.cups.forEach(c => pix(MUG, o.x + c.ux * P, GROUND - 30 - 4 * P - c.tier * 4 * P, MUG_PAL));
+  }
+
+  function drawStudent(p, x) {
+    const pal = { s: p.s, h: p.h, f: p.f, p: p.p, t: '#d9d9d6', T: '#8f9396', k: '#5d6266', b: '#2a2a2a', L: '#8e9399', m: '#fbfbfa', M: '#a7aaad' };
+    const y = GROUND - 13 * P;
+    pix(STUDENT, x, y, pal);
+    pix(p.prop, x, y + P, pal);
+    const step = Math.floor((frame + p.zz) / 20) % 3;   // Zzz steigt in Stufen auf
+    for (let i = 0; i <= step; i++) pix(ZZ, x + 20 + i * 8, y - 6 - i * 8, { z: '#8aa0bd' });
+  }
+
+  function drawSign(o) {
+    for (const rx of [6, o.w - 8]) {   // Abhängestangen mit Deckenkappe
+      rect(o.x + rx - 2, 0, 6, 6, '#c7ccd0');
+      rect(o.x + rx, 6, P, o.y - 6, '#aab1b7');
+    }
+    pix(SIGN, o.x, o.y, SIGN_PAL);
+  }
+
+  // Hut auf Kopf mit linker oberer Ecke (hx, hy)
+  function drawHat(lvl, hx, hy) {
+    if (lvl === 1) pix(HAT1, hx - 1 * P, hy - 3 * P, HAT_PAL);
+    else if (lvl === 2) pix(HAT2, hx - 4 * P, hy - 5 * P, HAT_PAL);
+    else if (lvl === 3) {
+      const x0 = hx - 6 * P, y0 = hy - 14 * P, key = plan.phd;
+      pix(PHD_DECOS[key], x0, y0, DECO_PAL);
+      pix(HAT3_BASE, x0, y0 + 10 * P, HAT_PAL);
+      const turn = Math.floor(frame / (state === 'play' ? 6 : 30)) % 2 === 0;
+      if (key === 'bau') {
+        pix(turn ? GEAR_A : GEAR_B, x0 + 18 * P, y0 + 10 * P, GEAR_PAL);
+        pix(turn ? GEAR_B : GEAR_A, x0 + 21 * P, y0 + 6 * P, GEAR_PAL);
+      } else if (key === 'reap') {
+        pix(turn ? ROTOR_A : ROTOR_B, x0 + 1 * P, y0, DECO_PAL);
+      }
+    }
+  }
+
+  function drawTray() {
+    const t = trayPos();
+    for (let i = 0; i < carried; i++) { const s = traySlot(i); pix(MUG, s.x, s.y, MUG_PAL); }
+    const w = (trayCols() * 6 + 1) * P;
+    rect(t.x, t.y, w, P, TRAY_PAL.t);
+    rect(t.x + P, t.y + P, w - 2 * P, P, TRAY_PAL.s);
+  }
+
+  function drawDino() {
+    const pal = state === 'ready' && (frame % 200) < 8 ? DINO_BLINK : DINO_PAL;
+    const lvl = state === 'play' ? hatLevel(score) : 0;
+    if (isDucking()) {
+      const top = GROUND - 9 * P;
+      drawTray();
+      pix(DUCK, dino.x, top, pal);
+      pix(DUCK_LEGS[Math.floor(frame / 5) % 2], dino.x, top + 6 * P, DINO_PAL);
+      drawHat(lvl, dino.x + 20 * P, top);
+      return;
+    }
+    const top = GROUND - dino.alt - 19 * P;
+    let legs = 'stand';
+    if (state === 'play' && !dino.jumping) legs = Math.floor(frame / 5) % 2 ? 'run1' : 'run2';
+    drawTray();
+    pix(BODY, dino.x, top, pal);
+    pix(LEGS[legs], dino.x, top + 15 * P, DINO_PAL);
+    rect(dino.x + 15 * P, top + 10 * P, 3 * P, P, C.ink);   // Arm hält das Tablett
+    if (state === 'over') {
+      rect(dino.x + 10 * P, top, 3 * P, 3 * P, '#fff');
+      pix(DEAD_EYE, dino.x + 10 * P, top, DINO_PAL);
+    } else drawHat(lvl, dino.x + 10 * P, top);
+  }
+
+  function drawFlies() {
+    flies.forEach(f => {
+      const s = f.kind === 'tray' ? traySlot(carried + f.idx) : cafeSlot(f.cafe, f.slot);
+      const k = Math.min(1, f.t);
+      pix(MUG, f.fx + (s.x - f.fx) * k, f.fy + (s.y - f.fy) * k - Math.sin(k * Math.PI) * 28, MUG_PAL);
+    });
+  }
+
+  function drawFallingHat() { if (hatFall) drawHat(hatFall.lvl, hatFall.x, hatFall.y); }
+
+  function drawHUD() {
+    ctx.font = 'bold 15px ' + FONT; ctx.textAlign = 'right'; ctx.fillStyle = C.ink;
+    const blinkScore = flash && flash.life > 120 && Math.floor(frame / 8) % 2 === 0;
+    ctx.fillText('BEST ' + pad(best) + '   CP ' + (blinkScore ? '   ' : pad(score)), W - 12, 24);
+    if (state === 'play') {
+      ctx.textAlign = 'left'; ctx.font = 'bold 13px ' + FONT; ctx.fillStyle = C.accent;
+      ctx.fillText(stageLabel(score), 12, 24);
+      pix(MUG, 12, 34, MUG_PAL);
+      ctx.fillStyle = C.ink; ctx.font = 'bold 12px ' + FONT;
+      ctx.fillText('× ' + carried + '   zurückgebracht: ' + returned, 26, 42);
+    }
+    ctx.textAlign = 'center';
+    if (flash) { ctx.fillStyle = C.accent; ctx.font = 'bold 18px ' + FONT; ctx.fillText(flash.t, W / 2, 66); }
+    if (sub) { ctx.fillStyle = '#8a6d4b'; ctx.font = 'bold 13px ' + FONT; ctx.fillText(sub.t, W / 2, 88); }
+
+    if (state === 'ready') {
+      ctx.fillStyle = C.ink;
+      ctx.font = 'bold 30px ' + FONT; ctx.fillText('HCU-REX', W / 2, 92);
+      ctx.font = '13px ' + FONT; ctx.fillText('Sammle CP – vom 1. Semester bis zur Professur', W / 2, 116);
+      ctx.fillStyle = C.accent; ctx.font = 'bold 13px ' + FONT;
+      ctx.fillText('Leertaste / ↑ / Antippen zum Starten', W / 2, 140);
+    } else if (state === 'over') {
+      ctx.fillStyle = C.ink;
+      ctx.font = 'bold 26px ' + FONT; ctx.fillText(score + ' CP erreicht', W / 2, 86);
+      ctx.font = '14px ' + FONT; ctx.fillText(reachedLabel(score), W / 2, 110);
+      ctx.fillText((returned === 1 ? '1 Tasse' : returned + ' Tassen') + ' ans Café zurückgebracht', W / 2, 130);
+      ctx.fillStyle = C.accent; ctx.font = 'bold 13px ' + FONT;
+      ctx.fillText('Leertaste / Antippen für Neustart', W / 2, 154);
+    }
+  }
+
+  function render() {
+    drawWall();
+    bg.forEach(drawBg);
+    drawGround();
+    obstacles.forEach(o => {
+      if (o.type === 'bin') drawBin(o);
+      else if (o.type === 'student') o.people.forEach((p, i) => drawStudent(p, o.x + i * 36));
+      else drawSign(o);
+    });
+    drawDino();
+    drawFlies();
+    drawFallingHat();
+    particles.forEach(p => rect(p.x, p.y, 4, 4, p.c));
+    drawHUD();
+  }
+
+  // ---------- Bestenliste (Supabase) ----------
+  // Ohne Zugangsdaten bleibt die Bestenliste einfach ausgeblendet.
+  function makeBoard() {
+    const ok = SUPABASE_URL && SUPABASE_KEY;
+    const el = id => document.getElementById(id);
+    const api = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
+    const headers = { apikey: SUPABASE_KEY, 'Content-Type': 'application/json' };   // publishable Key gehört nur in den apikey-Header
+    let kind = 'cp', pending = null, lastId = null;
+    try { el('pname').value = localStorage.getItem('hcuRexName') || ''; } catch (e) {}
+
+    function load() {
+      const order = kind === 'cp' ? 'cp.desc,created_at.asc' : 'cups.desc,created_at.asc';
+      fetch(api + 'scores?select=id,name,cp,cups&order=' + order + '&limit=10', { headers: headers })
+        .then(r => r.ok ? r.json() : Promise.reject(r.status))
+        .then(render)
+        .catch(() => { el('list').innerHTML = ''; const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'Bestenliste gerade nicht erreichbar.'; el('list').appendChild(li); });
+    }
+    function render(rows) {
+      const list = el('list'); list.innerHTML = '';
+      if (!rows.length) { const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'Noch keine Einträge. Sei die oder der Erste!'; list.appendChild(li); return; }
+      rows.forEach((r, i) => {
+        const li = document.createElement('li');
+        if (r.id === lastId) li.className = 'me';
+        [String(i + 1) + '.', r.name, kind === 'cp' ? r.cp + ' CP' : r.cups + (r.cups === 1 ? ' Tasse' : ' Tassen')].forEach((t, j) => {
+          const sp = document.createElement('span'); sp.className = ['r', 'n', 'v'][j]; sp.textContent = t; li.appendChild(sp);
+        });
+        list.appendChild(li);
+      });
+    }
+    document.querySelectorAll('#board .tabs button').forEach(b => b.addEventListener('click', () => {
+      kind = b.dataset.k;
+      document.querySelectorAll('#board .tabs button').forEach(x => x.classList.toggle('on', x === b));
+      load();
+    }));
+    el('submitForm').addEventListener('submit', e => {
+      e.preventDefault();
+      if (!pending) return;
+      const name = el('pname').value.trim().slice(0, 16);
+      try { localStorage.setItem('hcuRexName', name); } catch (err) {}
+      const body = { p_name: name, p_cp: pending.cp, p_cups: returned, p_duration: pending.dur };
+      el('btnSubmit').disabled = true; el('submitMsg').textContent = 'Wird eingetragen …';
+      fetch(api + 'rpc/submit_score', { method: 'POST', headers: headers, body: JSON.stringify(body) })
+        .then(r => r.json().then(j => r.ok ? j : Promise.reject(j && j.message)))
+        .then(id => { pending = null; lastId = id; el('submitMsg').textContent = 'Eingetragen!'; })
+        .then(load)
+        .catch(msg => { el('btnSubmit').disabled = false; el('submitMsg').textContent = 'Hat nicht geklappt' + (msg ? ' (' + msg + ')' : '') + '. Versuch es gleich nochmal.'; });
+    });
+
+    if (ok) { el('board').hidden = false; load(); }
+    return {
+      offer(cp, dur) {
+        if (!ok || cp < 10) return;
+        pending = { cp: cp, dur: Math.round(dur) };
+        // zurückgebrachte Tassen landen erst kurz nach dem Ende auf der Theke, daher beim Eintragen auslesen
+        el('resText').textContent = cp + ' CP – in die Bestenliste eintragen?';
+        el('submitMsg').textContent = ''; el('btnSubmit').disabled = false; el('submitForm').hidden = false;
+      },
+      hideSubmit() { if (ok) { pending = null; el('submitForm').hidden = true; } }
+    };
+  }
+  const board = makeBoard();
+
+  // ---------- Hauptschleife ----------
+  let last = performance.now();
+  function loop(t) {
+    const dt = Math.min((t - last) / 16.667, 3);
+    last = t;
+    update(dt);
+    render();
+    requestAnimationFrame(loop);
+  }
+  document.addEventListener('visibilitychange', () => { last = performance.now(); });
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
