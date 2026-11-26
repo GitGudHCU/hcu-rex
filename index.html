@@ -653,9 +653,9 @@
   function saveBest(v) { try { localStorage.setItem('hcuRexBestCups', String(v)); } catch (e) { /* in manchen Moodle-Iframes gesperrt */ } }
 
   let state = 'ready', speed = 0, dist = 0, score = 0, best = loadBest();
-  let obstacles = [], bg = [], floorBits = [], particles = [], flies = [], drops = [], stains = [];
+  let obstacles = [], bg = [], particles = [], flies = [], drops = [], stains = [];
   let spawnGap = 0, pendingGroup = null, flash = null, hatFall = null, overAt = 0, frame = 0;
-  let wallOff = 0, cupBlink = 0, carried = 0, returned = 0, startedAt = 0, finalCups = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
+  let wallOff = 0, floorPos = 0, cupBlink = 0, carried = 0, returned = 0, startedAt = 0, finalCups = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
   const dino = { x: 50, alt: 0, v: 0, jumping: false, duckHeld: false };
 
   // ---------- Laufbahn ----------
@@ -713,12 +713,6 @@
     const models = MODELS.slice().sort(() => Math.random() - 0.5).slice(0, n);
     return models.map((m, i) => ({ m: m, board: boards[i], u: 2 + Math.floor(Math.random() * (31 - m[0].length)) }));
   }
-  function addFloorBit(x) {
-    const r = Math.random();
-    floorBits.push({ x: x, type: 'pencil', o: Math.floor(rand(0, 4)) * P });   // nur noch ab und zu ein Bleistift
-  }
-  bg.push(makeBg('shelf', 520));
-  for (let x = 200; x < W + 40; x += rand(400, 1200)) addFloorBit(x);
 
   // ---------- Hindernisse ----------
   function weightedCups() {
@@ -881,10 +875,7 @@
       const r = Math.random();
       bg.push(makeBg(r < 0.5 ? 'shelf' : r < 0.85 ? 'door' : 'hydrant', W + rand(500, 1100)));
     }
-    floorBits.forEach(d => { d.x -= sp * dt; });
-    floorBits = floorBits.filter(d => d.x > -30);
-    let maxX = floorBits.length ? floorBits[floorBits.length - 1].x : 0;
-    while (maxX < W + 40) { maxX += rand(400, 1200); addFloorBit(maxX); }
+    floorPos += sp * dt;
 
     particles.forEach(p => { p.vy += 0.05 * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; });
     particles = particles.filter(p => p.life > 0 && p.y < H + 10);
@@ -1062,12 +1053,21 @@
   }
 
   function drawGround() {
-    rect(0, LINE, W, H - LINE, '#ffffff');
+    // Estrich: grobe Felder mit Fugen und ein paar Sprenkeln, läuft mit dem Flur mit
+    rect(0, LINE, W, H - LINE, '#efeee9');
+    rect(0, LINE + 1, W, 3, '#e6e5df');
+    const TILE = 192, k0 = Math.floor(floorPos / TILE);
+    for (let k = k0; k * TILE - floorPos < W; k++) {
+      const x0 = k * TILE - floorPos;
+      rect(x0, LINE + 4, P, H - LINE - 4, '#e2e1db');
+      let h = (k * 2654435761) >>> 0;
+      for (let i = 0; i < 7; i++) {
+        h = (h * 1103515245 + 12345) >>> 0;
+        const sx = x0 + 8 + (h % (TILE - 16)), sy = LINE + 8 + ((h >>> 12) % (H - LINE - 12));
+        rect(sx, sy, (h >>> 20) % 3 === 0 ? 4 : 2, 2, '#dcdad3');
+      }
+    }
     rect(0, LINE, W, 1, C.ink);
-    floorBits.forEach(d => {
-      const x = d.x, y = GROUND + 2 + d.o;
-      rect(x, y, 4, 4, '#f2b5c4'); rect(x + 4, y, 16, 4, '#f4c430'); rect(x + 20, y, 4, 4, '#e8c39e'); rect(x + 24, y + 2, 2, 2, C.ink);
-    });
     stains.forEach(st => {   // Kaffeepfütze mit Scherben
       rect(st.x, GROUND - 2, st.w, 4, '#a8743f');
       rect(st.x + 4, GROUND + 2, st.w - 8, 2, '#a8743f');
