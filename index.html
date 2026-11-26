@@ -650,7 +650,7 @@
   function saveBest(v) { try { localStorage.setItem('hcuRexBestCups', String(v)); } catch (e) { /* in manchen Moodle-Iframes gesperrt */ } }
 
   let state = 'ready', speed = 0, dist = 0, score = 0, best = loadBest();
-  let obstacles = [], bg = [], floorBits = [], particles = [], flies = [];
+  let obstacles = [], bg = [], floorBits = [], particles = [], flies = [], drops = [];
   let spawnGap = 0, pendingGroup = null, flash = null, sub = null, hatFall = null, overAt = 0, frame = 0;
   let wallOff = 0, carried = 0, returned = 0, startedAt = 0, finalCups = 0, lostCups = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
   const dino = { x: 50, alt: 0, v: 0, jumping: false, duckHeld: false };
@@ -700,6 +700,7 @@
     const w = { door: 56, hydrant: 40, shelf: 68, cafe: 124 }[type];
     const o = { type: type, x: x, w: w, served: 0, done: false };
     if (type === 'shelf') o.items = fillShelf();
+    if (type === 'door') o.rail = Math.random() < 0.4;   // manche Türen sind sinnloserweise mit einem Geländer zugestellt
     return o;
   }
   // Frei stehendes Metallregal mit 3 Böden; darauf nur 1–2 Modelle
@@ -731,6 +732,10 @@
     let t;
     if (Math.random() < 0.2) t = (score >= 60 && Math.random() < 0.33) ? 'students' : 'student';
     else t = (score >= 20 && Math.random() < 0.4) ? 'sign' : 'bin';
+    // Easter Egg: Dachschaden – selten statt eines Mülleimers ein Eimer mit Pfütze, von der Decke tropft es
+    if (t === 'bin' && score >= 30 && Math.random() < 0.08) {
+      return { type: 'bucket', w: 48, h: 18, y: GROUND - 18, drip: Math.floor(rand(0, 200)) };
+    }
     if (t === 'bin') {
       const n = score < 15 ? 2 : pick([2, 3, 3]);
       const lids = n === 3 ? ['#2b2b2b', '#22408f', '#f2c400'] : pick([['#2b2b2b', '#22408f'], ['#22408f', '#f2c400'], ['#2b2b2b', '#f2c400']]);
@@ -764,6 +769,7 @@
 
   function obstacleBoxes(o) {
     if (o.type === 'bin') return [{ x: o.x + 3, y: GROUND - 30 + 3, w: o.w - 6, h: 27 }];
+    if (o.type === 'bucket') return [{ x: o.x + 4, y: GROUND - 6, w: o.w - 8, h: 6 }, { x: o.x + 16, y: GROUND - 17, w: 18, h: 17 }];
     if (o.type === 'student') return o.people.map((p, i) => ({ x: o.x + i * 36 + 3, y: GROUND - 24, w: 30, h: 24 }));
     return [{ x: o.x + 2, y: o.y + 2, w: o.w - 4, h: o.h - 4 }];   // nur das Schild, die Stangen nicht
   }
@@ -802,7 +808,7 @@
   function start() {
     newPlan();
     state = 'play'; speed = START_SPEED; dist = 0; score = 0; pendingGroup = null;
-    obstacles = []; particles = []; flies = []; flash = null; sub = null; hatFall = null;
+    obstacles = []; particles = []; flies = []; drops = []; flash = null; sub = null; hatFall = null;
     bg = bg.filter(b => b.type !== 'cafe');
     spawnGap = 380; carried = 0; returned = 0; startedAt = performance.now();
     board.hideSubmit();
@@ -901,6 +907,8 @@
       if (f.t >= 1) { f.dead = true; if (f.kind === 'tray') carried++; else { f.cafe.served++; returned++; } }
     });
     flies = flies.filter(f => !f.dead);
+    drops.forEach(d => { d.vy += 0.45 * dt; d.x += (d.vx - sp) * dt; d.y += d.vy * dt; if (d.y > GROUND - 4 * P) { d.y = GROUND - 4 * P; d.vy = 0; d.vx = 0; } });
+    drops = drops.filter(d => d.x > -20);
 
     if (state !== 'play') return;
 
@@ -931,6 +939,28 @@
     for (const o of obstacles) {
       for (const ob of obstacleBoxes(o)) {
         for (const d of db) { if (hit(d, ob)) { gameOver(); return; } }
+      }
+    }
+
+    // Zu hoch gestapelt: Unter einem Schild bleibt nur so viel auf dem Tablett, wie
+    // darunter passt – der Rest fällt herunter. Wer viele Tassen trägt, springt besser drüber.
+    if (carried > 0) {
+      const t = trayPos(), cols = trayCols(), tw = (cols * 6 + 1) * P;
+      for (const o of obstacles) {
+        if (o.type !== 'sign') continue;
+        const bottom = o.y + o.h;
+        if (t.y <= bottom) continue;                                  // Tablett nicht unter dem Schild
+        if (o.x + o.w - 2 < t.x || o.x + 2 > t.x + tw) continue;      // nicht auf gleicher Höhe im Flur
+        const keep = Math.max(0, Math.floor((t.y - bottom) / (4 * P))) * cols;
+        if (carried > keep) {
+          for (let i = keep; i < carried; i++) {
+            const sl = traySlot(i);
+            drops.push({ x: sl.x, y: sl.y, vx: rand(-2.5, -0.5), vy: rand(-3, -1) });
+          }
+          const n = carried - keep;
+          carried = keep;
+          sub = { t: (n === 1 ? '1 Tasse' : n + ' Tassen') + ' runtergefallen!', life: 90, bad: true };
+        }
       }
     }
 
@@ -983,6 +1013,12 @@
       rect(x + 12, top + 12, 16, 20, '#eef3f4');
       rect(x + 30, top + 48, 6, 2, '#d2d5d8'); rect(x + 32, top + 50, 2, 4, '#d2d5d8');
       rect(x + 44, top + 30, 12, 8, '#fcfcfb'); rect(x + 46, top + 32, 8, 2, '#e0e0dc');
+      if (b.rail) {   // Geländer direkt vor der Tür
+        const rc = '#c3c9ce';
+        rect(x - 6, LINE - 40, 52, 2, rc);
+        rect(x - 6, LINE - 22, 52, 2, rc);
+        for (const px of [-6, 19, 44]) rect(x + px, LINE - 40, 2, 40, rc);
+      }
     } else if (b.type === 'hydrant') {
       rect(x, LINE - 72, 26, 46, '#ececea');
       rect(x + 2, LINE - 70, 22, 42, '#fbfbfa');
@@ -1039,6 +1075,34 @@
       else if (d.type === 'pencil') { rect(x, y, 4, 4, '#f2b5c4'); rect(x + 4, y, 16, 4, '#f4c430'); rect(x + 20, y, 4, 4, '#e8c39e'); rect(x + 24, y + 2, 2, 2, C.ink); }
       else { rect(x, y, 8, 6, '#c4c4c4'); rect(x + 2, y + 2, 4, 2, '#fff'); }
     });
+  }
+
+  const BUCKET = [
+    '..hhhhhh..',
+    '.h......h.',
+    'kkkkkkkkkk',
+    'kbbbbbbbbk',
+    '.rrrrrrrr.',
+    '.rrrrrrrr.',
+    '.rrrrrrrr.',
+    '..rrrrrr..',
+    '..rrrrrr..'
+  ];
+  const BUCKET_PAL = { h: '#8a9197', k: '#a8322c', b: '#7fb6df', r: '#d0463d' };
+  function drawBucket(o) {
+    const x = o.x, bx = x + 15;
+    // Pfütze auf dem Boden
+    rect(x + 6, GROUND - 2, o.w - 12, 4, '#93c6ea');
+    rect(x, GROUND, o.w, 2, '#93c6ea');
+    rect(x + 10, GROUND - 2, 8, 2, '#d6ecfa');
+    // feuchter Fleck an der Decke
+    rect(bx + 2, 0, 16, 2, '#dfe6ea'); rect(bx + 6, 2, 8, 2, '#dfe6ea');
+    // Tropfen fällt in den Eimer
+    const fall = GROUND - 18, cyc = 70, t = (frame + o.drip) % cyc;
+    const dy = (t / cyc) * (t / cyc) * fall;
+    rect(bx + 8, dy, 2, 4, '#5f9fd1');
+    if (t < 6) rect(bx + 4, GROUND - 14 - t, 2, 2, '#7fb6df'), rect(bx + 14, GROUND - 14 - t, 2, 2, '#7fb6df');
+    pix(BUCKET, bx, GROUND - 18, BUCKET_PAL);
   }
 
   function drawBin(o) {
@@ -1127,7 +1191,7 @@
 
   function drawHUD() {
     ctx.font = 'bold 15px ' + FONT; ctx.textAlign = 'right'; ctx.fillStyle = C.ink;
-    const blinkScore = sub && sub.life > 90 && Math.floor(frame / 8) % 2 === 0;
+    const blinkScore = sub && !sub.bad && sub.life > 90 && Math.floor(frame / 8) % 2 === 0;
     ctx.fillText('BEST ' + pad(best) + '   TASSEN ' + (blinkScore ? '   ' : pad(state === 'over' ? finalCups : returned)), W - 12, 24);
     if (state === 'play') {
       ctx.textAlign = 'left'; ctx.font = 'bold 13px ' + FONT; ctx.fillStyle = C.accent;
@@ -1138,7 +1202,7 @@
     }
     ctx.textAlign = 'center';
     if (flash) { ctx.fillStyle = C.accent; ctx.font = 'bold 18px ' + FONT; ctx.fillText(flash.t, W / 2, 66); }
-    if (sub) { ctx.fillStyle = '#8a6d4b'; ctx.font = 'bold 13px ' + FONT; ctx.fillText(sub.t, W / 2, 88); }
+    if (sub) { ctx.fillStyle = sub.bad ? '#c0392b' : '#8a6d4b'; ctx.font = 'bold 13px ' + FONT; ctx.fillText(sub.t, W / 2, 88); }
 
     if (state === 'ready') {
       ctx.fillStyle = C.ink;
@@ -1146,6 +1210,8 @@
       ctx.font = '13px ' + FONT; ctx.fillText('Sammle Tassen und bring sie zurück ins Café', W / 2, 116);
       ctx.fillStyle = C.accent; ctx.font = 'bold 13px ' + FONT;
       ctx.fillText('Leertaste / ↑ / Antippen zum Starten', W / 2, 140);
+      ctx.fillStyle = '#888'; ctx.font = '12px ' + FONT;
+      ctx.fillText('Hoher Tassenstapel? Unter Fluchtwegschildern fällt er runter.', W / 2, 162);
     } else if (state === 'over') {
       ctx.fillStyle = C.ink;
       ctx.font = 'bold 26px ' + FONT; ctx.fillText((finalCups === 1 ? '1 Tasse' : finalCups + ' Tassen') + ' zurückgebracht', W / 2, 86);
@@ -1163,11 +1229,13 @@
     obstacles.forEach(o => {
       if (o.type === 'bin') drawBin(o);
       else if (o.type === 'student') o.people.forEach((p, i) => drawStudent(p, o.x + i * 36));
+      else if (o.type === 'bucket') drawBucket(o);
       else drawSign(o);
     });
     drawDino();
     drawFlies();
     drawFallingHat();
+    drops.forEach(d => pix(MUG, d.x, d.y, MUG_PAL));
     particles.forEach(p => rect(p.x, p.y, 4, 4, p.c));
     drawHUD();
   }
