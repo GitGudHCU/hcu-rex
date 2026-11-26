@@ -37,6 +37,9 @@
   .note { font-size: 11px; color: #888; margin-top: 10px; }
   #about { max-width: 900px; margin: 8px auto 32px; font-size: 12px; line-height: 1.5; color: #777; }
   #about a { color: #c4561d; }
+  #privacy { max-width: 900px; margin: -16px auto 32px; font-size: 11px; line-height: 1.5; color: #888; }
+  #privacy summary { cursor: pointer; font-weight: bold; }
+  #privacy p { margin: 6px 0; }
 </style>
 </head>
 <body>
@@ -50,15 +53,23 @@
   <section id="board" hidden>
     <form id="submitForm" hidden>
       <div class="res" id="resText"></div>
-      <input id="pname" maxlength="16" placeholder="Spitzname (optional)" autocomplete="nickname" aria-label="Spitzname für die Bestenliste (optional)">
+      <input id="pname" maxlength="16" placeholder="Spitzname (öffentlich sichtbar, optional)" autocomplete="nickname" aria-label="Spitzname für die Bestenliste (optional)">
       <button id="btnSubmit" type="submit">Eintragen</button>
       <div id="submitMsg" role="status"></div>
     </form>
     <h2>HCU-BESTENLISTE · ZURÜCKGEBRACHTE TASSEN</h2>
     <ol id="list"></ol>
-    <p class="note">Gespeichert werden nur Name, Tassen, Spieldauer und Zeitpunkt. Ohne Namen erscheinst du als „anonym“.</p>
+    <p class="note">Gespeichert werden nur Name, Tassen, Spieldauer und Zeitpunkt. Ohne Namen erscheinst du als „anonym“. Nimm lieber einen Spitznamen als deinen echten Namen.</p>
   </section>
   <p id="about">Dieses Spiel wurde mit ein wenig Kreativität und deutlich weniger Können mithilfe von Claude.ai entwickelt. Es soll Spaß machen und dabei die Thematik des ekligen Geschirrs bei uns auf den Gängen adressieren. Mir ist bewusst, dass Videospieldesign nur eine von vielen Kunstarten ist, die unter einem von KI überschwemmten Markt leiden. Auch die Grafik dieses Spiels basiert auf einem Stil, den die KI nur nachahmen kann, weil sie ohne die Zustimmung der Urheber des Originalspiels aus Google Chrome mit diesem trainiert wurde. Diese Urheber sind Sebastien Gabriel, Alan Bettes und Edward Jung. <a href="mailto:jannik.rietz@hcu-hamburg.de">Schreib mir</a>, wenn du eine kunstschaffende Person bist und darüber reden möchtest.</p>
+  <details id="privacy">
+    <summary>Datenschutz</summary>
+    <p><b>Verantwortlich:</b> Jannik Rietz, jannik.rietz@hcu-hamburg.de. Dies ist ein privates, nicht kommerzielles Spiel.</p>
+    <p><b>Bestenliste:</b> Wenn du auf „Eintragen“ tippst, werden dein Spitzname, die Zahl der zurückgebrachten Tassen, die Spieldauer, der Zeitpunkt und eine zufällige Gerätekennung gespeichert. Name und Tassen sind öffentlich zu sehen, die Gerätekennung nicht. Sie sorgt nur dafür, dass jedes Gerät einen Eintrag hat. Rechtsgrundlage ist deine Einwilligung durch das Eintragen (Art. 6 Abs. 1 lit. a DSGVO). Ohne Eintragen wird nichts gespeichert.</p>
+    <p><b>Auf deinem Gerät:</b> Im Browser-Speicher liegen dein Bestwert, dein Spitzname und die Gerätekennung. Es gibt keine Cookies, kein Tracking und keine Werbung.</p>
+    <p><b>Dienstleister:</b> Die Seite liegt bei Netlify, Inc. (USA). Die Bestenliste liegt in einer Datenbank von Supabase, Inc. mit Serverstandort in Irland (EU). Beide Anbieter verarbeiten beim Aufruf technisch bedingt deine IP-Adresse und Browserdaten in kurzlebigen Server-Protokollen. Rechtsgrundlage ist das berechtigte Interesse am sicheren Betrieb der Seite (Art. 6 Abs. 1 lit. f DSGVO). Die Übermittlung in die USA ist über die Auftragsverarbeitungsverträge der Anbieter mit EU-Standardvertragsklauseln abgesichert.</p>
+    <p><b>Deine Rechte:</b> Du kannst Auskunft, Berichtigung oder Löschung deines Eintrags verlangen. Schreib dazu eine Mail mit deinem Spitznamen an die Adresse oben. Du kannst dich außerdem bei einer Datenschutz-Aufsichtsbehörde beschweren, in Hamburg beim Hamburgischen Beauftragten für Datenschutz und Informationsfreiheit.</p>
+  </details>
 </div>
 
 <script>
@@ -71,7 +82,7 @@
 
   // ---------- Grundeinstellungen ----------
   const H = 240, GROUND = 204, LINE = GROUND - 2, P = 2;
-  let W = 800;   // sichtbare Breite der Spielwelt – passt sich an die Fensterbreite an
+  let W = 800, TOP = 0;   // TOP < 0: zusätzliche Wandfläche oben (Handy hochkant)   // sichtbare Breite der Spielwelt – passt sich an die Fensterbreite an
   const GRAVITY = 0.62, JUMP_V = 11, START_SPEED = 6, MAX_SPEED = 14;
   const C = { ink: '#535353', accent: '#c4561d', wall: '#f7f7f5', joint: '#eeeeeb', hole: '#e6e6e2' };
   const FONT = '"Courier New", Courier, monospace';
@@ -88,12 +99,18 @@
     let w = cw >= 900 ? Math.max(900, cw / 2.4) : 600 + Math.max(0, cw - 360) / 540 * 300;
     w = Math.max(w, cw * H / Math.max(120, vh - 124));   // nicht höher als das Fenster
     W = Math.round(w);
+    // Hochkant: gleiche Sicht nach vorn, aber oben mehr Wand, damit das Spielfeld nicht so flach ist
+    const portrait = vh > (window.innerWidth || cw) * 1.1;
+    const extra = portrait ? Math.max(0, Math.min(Math.round(W * 0.62 - H), Math.round((vh - 140) * W / cw - H))) : 0;
+    TOP = -extra;
+    const HT = H + extra;
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
-    const ch = cw * H / W;
-    canvas.style.aspectRatio = W + ' / ' + H;
+    const ch = cw * HT / W;
+    canvas.style.aspectRatio = W + ' / ' + HT;
     canvas.width = Math.round(cw * dpr);
     canvas.height = Math.round(ch * dpr);
-    ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
+    const sc = canvas.width / W;
+    ctx.setTransform(sc, 0, 0, canvas.height / HT, 0, extra * canvas.height / HT);
     ctx.imageSmoothingEnabled = false;
   }
   resize();
@@ -846,7 +863,7 @@
   }
   function confetti() {
     for (let i = 0; i < 70; i++) {
-      particles.push({ x: rand(0, W), y: rand(-40, 0), vx: rand(-1, 1), vy: rand(0.5, 2), c: pick(SHIRTS.concat(['#d4a017', C.accent])), life: rand(120, 200) });
+      particles.push({ x: rand(0, W), y: rand(TOP - 40, TOP), vx: rand(-1, 1), vy: rand(0.5, 2), c: pick(SHIRTS.concat(['#d4a017', C.accent])), life: rand(120, 200) });
     }
   }
   function cafeSlot(cafe, i) { return { x: cafe.x + 4 + (i % 10) * 6 * P, y: LINE - 32 - 4 * P - Math.floor(i / 10) * 4 * P }; }
@@ -984,11 +1001,11 @@
 
   // ---------- Zeichnen ----------
   function drawWall() {
-    rect(0, 0, W, LINE, C.wall);
-    rect(0, 60, W, P, C.joint);
+    rect(0, TOP, W, LINE - TOP, C.wall);
+    for (let y = 60; y > TOP; y -= 128) rect(0, y, W, P, C.joint);
     for (let x = -wallOff; x < W; x += 96) {
-      rect(x, 0, P, LINE, C.joint);
-      for (const ax of [24, 72]) for (const ay of [28, 96, 160]) rect(x + ax, ay, P, P, C.hole);
+      rect(x, TOP, P, LINE - TOP, C.joint);
+      for (const ax of [24, 72]) for (let ay = 160; ay > TOP; ay -= 66) rect(x + ax, ay, P, P, C.hole);
     }
   }
 
@@ -1098,10 +1115,10 @@
     rect(x, GROUND, o.w, 2, '#93c6ea');
     rect(x + 10, GROUND - 2, 8, 2, '#d6ecfa');
     // feuchter Fleck an der Decke
-    rect(bx + 2, 0, 16, 2, '#dfe6ea'); rect(bx + 6, 2, 8, 2, '#dfe6ea');
+    rect(bx + 2, TOP, 16, 2, '#dfe6ea'); rect(bx + 6, TOP + 2, 8, 2, '#dfe6ea');
     // Tropfen fällt in den Eimer
     const fall = GROUND - 18, cyc = 70, t = (frame + o.drip) % cyc;
-    const dy = (t / cyc) * (t / cyc) * fall;
+    const dy = TOP + (t / cyc) * (t / cyc) * (fall - TOP);
     rect(bx + 8, dy, 2, 4, '#5f9fd1');
     if (t < 6) rect(bx + 4, GROUND - 14 - t, 2, 2, '#7fb6df'), rect(bx + 14, GROUND - 14 - t, 2, 2, '#7fb6df');
     pix(BUCKET, bx, GROUND - 18, BUCKET_PAL);
@@ -1125,8 +1142,8 @@
 
   function drawSign(o) {
     for (const rx of [6, o.w - 8]) {   // Abhängestangen mit Deckenkappe
-      rect(o.x + rx - 2, 0, 6, 6, '#c7ccd0');
-      rect(o.x + rx, 6, P, o.y - 6, '#aab1b7');
+      rect(o.x + rx - 2, TOP, 6, 6, '#c7ccd0');
+      rect(o.x + rx, TOP + 6, P, o.y - TOP - 6, '#aab1b7');
     }
     pix(SIGN, o.x, o.y, SIGN_PAL);
   }
@@ -1194,10 +1211,10 @@
   function drawHUD() {
     ctx.font = 'bold 15px ' + FONT; ctx.textAlign = 'right'; ctx.fillStyle = C.ink;
     const blinkScore = cupBlink > 0 && Math.floor(frame / 8) % 2 === 0;
-    ctx.fillText('BEST ' + pad(best) + '   TASSEN ' + (blinkScore ? '   ' : pad(state === 'over' ? finalCups : returned)), W - 12, 24);
+    ctx.fillText('BEST ' + pad(best) + '   TASSEN ' + (blinkScore ? '   ' : pad(state === 'over' ? finalCups : returned)), W - 12, TOP + 24);
     if (state === 'play') {
       ctx.textAlign = 'left'; ctx.font = 'bold 13px ' + FONT; ctx.fillStyle = C.accent;
-      ctx.fillText(stageLabel(score), 12, 24);
+      ctx.fillText(stageLabel(score), 12, TOP + 24);
     }
     ctx.textAlign = 'center';
     if (flash) { ctx.fillStyle = C.accent; ctx.font = 'bold 18px ' + FONT; ctx.fillText(flash.t, W / 2, 66); }
