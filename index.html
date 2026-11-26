@@ -27,7 +27,6 @@
   #board button.on, #btnSubmit { background: #535353 !important; color: #fff !important; }
   #board button:disabled { opacity: 0.5; cursor: default; }
   #submitMsg { flex-basis: 100%; font-size: 13px; }
-  .tabs { display: flex; gap: 8px; margin-bottom: 8px; }
   #list { list-style: none; margin: 0; padding: 0; font-size: 14px; }
   #list li { display: grid; grid-template-columns: 2.2em 1fr auto; gap: 8px; padding: 5px 2px; border-bottom: 1px solid #eee; font-variant-numeric: tabular-nums; }
   #list li .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -52,13 +51,9 @@
       <button id="btnSubmit" type="submit">Eintragen</button>
       <div id="submitMsg" role="status"></div>
     </form>
-    <h2>HCU-BESTENLISTE</h2>
-    <div class="tabs">
-      <button type="button" data-k="cp" class="on">Meiste CP</button>
-      <button type="button" data-k="cups">Meiste Tassen</button>
-    </div>
+    <h2>HCU-BESTENLISTE · ZURÜCKGEBRACHTE TASSEN</h2>
     <ol id="list"></ol>
-    <p class="note">Gespeichert werden nur Name, CP, Tassen, Spieldauer und Zeitpunkt. Ohne Namen erscheinst du als „anonym“.</p>
+    <p class="note">Gespeichert werden nur Name, Tassen, Spieldauer und Zeitpunkt. Ohne Namen erscheinst du als „anonym“.</p>
   </section>
 </div>
 
@@ -74,7 +69,6 @@
   const H = 240, GROUND = 204, LINE = GROUND - 2, P = 2;
   let W = 800;   // sichtbare Breite der Spielwelt – passt sich an die Fensterbreite an
   const GRAVITY = 0.62, JUMP_V = 11, START_SPEED = 6, MAX_SPEED = 14;
-  const YEAR = 40;   // CP-Strecke pro Jahr (Promotion, Postdoc, Professur)
   const C = { ink: '#535353', accent: '#c4561d', wall: '#f7f7f5', joint: '#eeeeeb', hole: '#e6e6e2' };
   const FONT = '"Courier New", Courier, monospace';
 
@@ -652,66 +646,41 @@
   const PANTS = ['#2e3b55', '#3b3b3b', '#5b4636', '#4b5d6b'];
   const CUP_WEIGHTS = [30, 24, 18, 12, 8, 5, 3];   // Wahrscheinlichkeit für 0, 1, 2 … 6 Tassen
 
-  function loadBest() { try { return parseInt(localStorage.getItem('hcuRexBest') || '0', 10) || 0; } catch (e) { return 0; } }
-  function saveBest(v) { try { localStorage.setItem('hcuRexBest', String(v)); } catch (e) { /* in manchen Moodle-Iframes gesperrt */ } }
+  function loadBest() { try { return parseInt(localStorage.getItem('hcuRexBestCups') || '0', 10) || 0; } catch (e) { return 0; } }
+  function saveBest(v) { try { localStorage.setItem('hcuRexBestCups', String(v)); } catch (e) { /* in manchen Moodle-Iframes gesperrt */ } }
 
   let state = 'ready', speed = 0, dist = 0, score = 0, best = loadBest();
   let obstacles = [], bg = [], floorBits = [], particles = [], flies = [];
   let spawnGap = 0, pendingGroup = null, flash = null, sub = null, hatFall = null, overAt = 0, frame = 0;
-  let wallOff = 0, carried = 0, returned = 0, startedAt = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
+  let wallOff = 0, carried = 0, returned = 0, startedAt = 0, finalCups = 0, lostCups = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
   const dino = { x: 50, alt: 0, v: 0, jumping: false, duckHeld: false };
 
-  // ---------- Laufbahn: wird bei jedem Start neu ausgewürfelt ----------
-  // Bachelor 6–8 Semester, Master 4–6 Semester, Promotion 3–5 Jahre,
-  // danach 5 Jahre Postdoc, dann Professur (unbegrenzt)
-  const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
-  let plan, msList, msIdx;
-  // Bachelor immer 180 CP, Master immer 120 CP (zusammen 300 CP) – egal wie viele
-  // Semester. Die CP werden gleichmäßig auf ganze Zahlen verteilt, der Rest geht an
-  // die ersten Semester (z. B. 7 Semester: 5 × 26 + 2 × 25 = 180).
-  function splitCP(total, n) {
-    const base = Math.floor(total / n), rest = total - base * n, ends = [];
-    let sum = 0;
-    for (let i = 0; i < n; i++) { sum += base + (i < rest ? 1 : 0); ends.push(sum); }
-    return ends;
-  }
+  // ---------- Laufbahn ----------
+  // Der Fortschritt (score) läuft unsichtbar mit der Strecke mit. Er bestimmt Tempo, Hüte
+  // und wann ein Café kommt. Gezählt werden für die Spieler:innen nur zurückgebrachte Tassen.
+  const CAFE_EVERY = 60;   // alle 60 Fortschrittspunkte ein Café (ca. 15–20 Sekunden)
+  let plan, msIdx;
+  const STAGES = [
+    { at: 180, t: 'Bachelor geschafft!' },
+    { at: 300, t: 'Master geschafft!' },
+    { at: 420, t: 'Promotion geschafft! Dr. Rex' },
+    { at: 600, t: 'Professur! Verbeamtet auf Lebenszeit.' }
+  ];
   function newPlan() {
-    const bs = randInt(6, 8), mstr = randInt(4, 6), py = randInt(3, 5);
-    const B = 180, M = 300, D = M + py * YEAR, PROF = D + 5 * YEAR;
-    const bEnds = splitCP(180, bs), mEnds = splitCP(120, mstr).map(e => B + e);
-    plan = { B: B, M: M, D: D, PROF: PROF, bEnds: bEnds, mEnds: mEnds, phd: pick(PHD_KEYS) };
-    msList = [];
-    bEnds.forEach((at, i) => msList.push({ at: at, t: i < bs - 1 ? (i + 1) + '. Semester bestanden!' : 'Bachelor geschafft!', big: i === bs - 1 }));
-    mEnds.forEach((at, i) => msList.push({ at: at, t: i < mstr - 1 ? (i + 1) + '. Mastersemester bestanden!' : 'Master geschafft!', big: i === mstr - 1 }));
-    for (let i = 1; i <= py; i++) msList.push({ at: M + i * YEAR, t: i < py ? i + '. Promotionsjahr geschafft!' : 'Promotion geschafft!', big: i === py });
-    for (let i = 1; i <= 5; i++) msList.push({ at: D + i * YEAR, t: i < 5 ? i + '. Postdoc-Jahr geschafft!' : 'Professur! Verbeamtet auf Lebenszeit.', big: i === 5 });
+    plan = { B: 180, M: 300, D: 420, PROF: 600, phd: pick(PHD_KEYS) };
     msIdx = 0;
   }
-  // Nummer des laufenden Semesters anhand der Semestergrenzen
-  const semNo = (ends, s) => { let i = 0; while (i < ends.length - 1 && s >= ends[i]) i++; return i + 1; };
+  // nächster Café-Halt; auf den Laufbahnstufen mit Abschlussmeldung und Konfetti
   function nextMs() {
-    if (msIdx >= msList.length) {   // als Professor:in geht es unbegrenzt weiter
-      const n = msIdx - msList.length + 1;
-      return { at: plan.PROF + n * YEAR, t: n + '. Dienstjahr als Professor geschafft!', big: false };
-    }
-    return msList[msIdx];
+    const at = (msIdx + 1) * CAFE_EVERY;
+    const st = STAGES.find(x => x.at === at);
+    return { at: at, t: st ? st.t : null, big: !!st };
   }
   newPlan();
 
-  function stageLabel(s) {
-    if (s < plan.B) return semNo(plan.bEnds, s) + '. Semester · Bachelor';
-    if (s < plan.M) return semNo(plan.mEnds, s) + '. Semester · Master';
-    if (s < plan.D) return (Math.floor((s - plan.M) / YEAR) + 1) + '. Jahr · Promotion';
-    if (s < plan.PROF) return (Math.floor((s - plan.D) / YEAR) + 1) + '. Jahr · Postdoc';
-    return 'Prof. Dr. Rex · ' + (Math.floor((s - plan.PROF) / YEAR) + 1) + '. Dienstjahr';
-  }
-  function reachedLabel(s) {
-    if (s < plan.B) return 'bis ins ' + semNo(plan.bEnds, s) + '. Bachelorsemester';
-    if (s < plan.M) return 'bis ins ' + semNo(plan.mEnds, s) + '. Mastersemester';
-    if (s < plan.D) return 'bis ins ' + (Math.floor((s - plan.M) / YEAR) + 1) + '. Promotionsjahr';
-    if (s < plan.PROF) return 'bis ins ' + (Math.floor((s - plan.D) / YEAR) + 1) + '. Postdoc-Jahr';
-    return 'bis zur Professur – im ' + (Math.floor((s - plan.PROF) / YEAR) + 1) + '. Dienstjahr';
-  }
+  const STAGE_NAMES = ['Bachelor', 'Master', 'Promotion', 'Postdoc', 'Prof. Dr. Rex'];
+  function stageLabel(s) { return STAGE_NAMES[phase(s)]; }
+  function reachedLabel(s) { return ['im Bachelor', 'im Master', 'in der Promotion', 'als Postdoc', 'als Professor:in'][phase(s)]; }
   function hatLevel(s) { return s >= plan.D ? 3 : s >= plan.M ? 2 : s >= plan.B ? 1 : 0; }
   // Tempo steigt bis zur Professur stetig an, danach bleibt es konstant
   // Abschnittsweise linear: Bachelor ruhig, ab der Promotion zieht das Tempo deutlich an
@@ -870,9 +839,8 @@
 
   // ---------- Meilensteine & Café ----------
   function milestone(m) {
-    const text = m.t;
     if (m.big) confetti();
-    flash = { t: text, life: 150 };
+    if (m.t) flash = { t: m.t, life: 150 };
     if (!bg.some(b => b.type === 'cafe' && !b.done)) {
       bg = bg.filter(b => b.x < W);   // noch nicht sichtbare Details weichen dem Café
       const last = bg[bg.length - 1];
@@ -891,9 +859,12 @@
     state = 'over';
     overAt = performance.now();
     score = Math.floor(score);
-    if (score > best) { best = score; saveBest(best); }
+    // Tassen, die schon zum Café fliegen, zählen noch; die auf dem Tablett gehen verloren
+    finalCups = returned + flies.filter(f => f.kind === 'cafe').length;
+    lostCups = carried + flies.filter(f => f.kind === 'tray').length;
+    if (finalCups > best) { best = finalCups; saveBest(best); }
     const lvl = hatLevel(score);
-    board.offer(score, (performance.now() - startedAt) / 1000);
+    board.offer(finalCups, score, (performance.now() - startedAt) / 1000);
     if (lvl > 0) hatFall = { lvl: lvl, x: dino.x + 10 * P, y: GROUND - dino.alt - 19 * P, vx: -1.2, vy: -5, rest: false };
   }
 
@@ -1156,14 +1127,14 @@
 
   function drawHUD() {
     ctx.font = 'bold 15px ' + FONT; ctx.textAlign = 'right'; ctx.fillStyle = C.ink;
-    const blinkScore = flash && flash.life > 120 && Math.floor(frame / 8) % 2 === 0;
-    ctx.fillText('BEST ' + pad(best) + '   CP ' + (blinkScore ? '   ' : pad(score)), W - 12, 24);
+    const blinkScore = sub && sub.life > 90 && Math.floor(frame / 8) % 2 === 0;
+    ctx.fillText('BEST ' + pad(best) + '   TASSEN ' + (blinkScore ? '   ' : pad(state === 'over' ? finalCups : returned)), W - 12, 24);
     if (state === 'play') {
       ctx.textAlign = 'left'; ctx.font = 'bold 13px ' + FONT; ctx.fillStyle = C.accent;
       ctx.fillText(stageLabel(score), 12, 24);
       pix(MUG, 12, 34, MUG_PAL);
       ctx.fillStyle = C.ink; ctx.font = 'bold 12px ' + FONT;
-      ctx.fillText('× ' + carried + '   zurückgebracht: ' + returned, 26, 42);
+      ctx.fillText('× ' + carried + ' auf dem Tablett', 26, 42);
     }
     ctx.textAlign = 'center';
     if (flash) { ctx.fillStyle = C.accent; ctx.font = 'bold 18px ' + FONT; ctx.fillText(flash.t, W / 2, 66); }
@@ -1172,14 +1143,14 @@
     if (state === 'ready') {
       ctx.fillStyle = C.ink;
       ctx.font = 'bold 30px ' + FONT; ctx.fillText('HCU-REX', W / 2, 92);
-      ctx.font = '13px ' + FONT; ctx.fillText('Sammle CP – vom 1. Semester bis zur Professur', W / 2, 116);
+      ctx.font = '13px ' + FONT; ctx.fillText('Sammle Tassen und bring sie zurück ins Café', W / 2, 116);
       ctx.fillStyle = C.accent; ctx.font = 'bold 13px ' + FONT;
       ctx.fillText('Leertaste / ↑ / Antippen zum Starten', W / 2, 140);
     } else if (state === 'over') {
       ctx.fillStyle = C.ink;
-      ctx.font = 'bold 26px ' + FONT; ctx.fillText(score + ' CP erreicht', W / 2, 86);
-      ctx.font = '14px ' + FONT; ctx.fillText(reachedLabel(score), W / 2, 110);
-      ctx.fillText((returned === 1 ? '1 Tasse' : returned + ' Tassen') + ' ans Café zurückgebracht', W / 2, 130);
+      ctx.font = 'bold 26px ' + FONT; ctx.fillText((finalCups === 1 ? '1 Tasse' : finalCups + ' Tassen') + ' zurückgebracht', W / 2, 86);
+      ctx.font = '14px ' + FONT; ctx.fillText('Gestolpert ' + reachedLabel(score), W / 2, 110);
+      if (lostCups) ctx.fillText((lostCups === 1 ? '1 Tasse' : lostCups + ' Tassen') + ' vom Tablett gefallen', W / 2, 130);
       ctx.fillStyle = C.accent; ctx.font = 'bold 13px ' + FONT;
       ctx.fillText('Leertaste / Antippen für Neustart', W / 2, 154);
     }
@@ -1208,12 +1179,11 @@
     const el = id => document.getElementById(id);
     const api = SUPABASE_URL.replace(/\/$/, '') + '/rest/v1/';
     const headers = { apikey: SUPABASE_KEY, 'Content-Type': 'application/json' };   // publishable Key gehört nur in den apikey-Header
-    let kind = 'cp', pending = null, lastId = null;
+    let pending = null, lastId = null;
     try { el('pname').value = localStorage.getItem('hcuRexName') || ''; } catch (e) {}
 
     function load() {
-      const order = kind === 'cp' ? 'cp.desc,created_at.asc' : 'cups.desc,created_at.asc';
-      fetch(api + 'scores?select=id,name,cp,cups&order=' + order + '&limit=10', { headers: headers })
+      fetch(api + 'scores?select=id,name,cups&order=cups.desc,created_at.asc&limit=10', { headers: headers })
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then(render)
         .catch(() => { el('list').innerHTML = ''; const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'Bestenliste gerade nicht erreichbar.'; el('list').appendChild(li); });
@@ -1224,23 +1194,18 @@
       rows.forEach((r, i) => {
         const li = document.createElement('li');
         if (r.id === lastId) li.className = 'me';
-        [String(i + 1) + '.', r.name, kind === 'cp' ? r.cp + ' CP' : r.cups + (r.cups === 1 ? ' Tasse' : ' Tassen')].forEach((t, j) => {
+        [String(i + 1) + '.', r.name, r.cups + (r.cups === 1 ? ' Tasse' : ' Tassen')].forEach((t, j) => {
           const sp = document.createElement('span'); sp.className = ['r', 'n', 'v'][j]; sp.textContent = t; li.appendChild(sp);
         });
         list.appendChild(li);
       });
     }
-    document.querySelectorAll('#board .tabs button').forEach(b => b.addEventListener('click', () => {
-      kind = b.dataset.k;
-      document.querySelectorAll('#board .tabs button').forEach(x => x.classList.toggle('on', x === b));
-      load();
-    }));
     el('submitForm').addEventListener('submit', e => {
       e.preventDefault();
       if (!pending) return;
       const name = el('pname').value.trim().slice(0, 16);
       try { localStorage.setItem('hcuRexName', name); } catch (err) {}
-      const body = { p_name: name, p_cp: pending.cp, p_cups: returned, p_duration: pending.dur };
+      const body = { p_name: name, p_cp: pending.progress, p_cups: pending.cups, p_duration: pending.dur };
       el('btnSubmit').disabled = true; el('submitMsg').textContent = 'Wird eingetragen …';
       fetch(api + 'rpc/submit_score', { method: 'POST', headers: headers, body: JSON.stringify(body) })
         .then(r => r.json().then(j => r.ok ? j : Promise.reject(j && j.message)))
@@ -1251,11 +1216,11 @@
 
     if (ok) { el('board').hidden = false; load(); }
     return {
-      offer(cp, dur) {
-        if (!ok || cp < 10) return;
-        pending = { cp: cp, dur: Math.round(dur) };
-        // zurückgebrachte Tassen landen erst kurz nach dem Ende auf der Theke, daher beim Eintragen auslesen
-        el('resText').textContent = cp + ' CP – in die Bestenliste eintragen?';
+      offer(cups, progress, dur) {
+        if (!ok || cups < 1) return;
+        // progress wird nur für die Plausibilitätsprüfung mitgeschickt, angezeigt wird er nicht
+        pending = { cups: cups, progress: progress, dur: Math.round(dur) };
+        el('resText').textContent = (cups === 1 ? '1 Tasse' : cups + ' Tassen') + ' – in die Bestenliste eintragen?';
         el('submitMsg').textContent = ''; el('btnSubmit').disabled = false; el('submitForm').hidden = false;
       },
       hideSubmit() { if (ok) { pending = null; el('submitForm').hidden = true; } }
