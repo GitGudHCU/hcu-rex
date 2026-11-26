@@ -696,7 +696,7 @@
     return SPEED_AT[p] + (SPEED_AT[p + 1] - SPEED_AT[p]) * (s - a) / (b - a);
   }
   // Je Laufbahnstufe: Anteil Schilder-Ketten und Spielraum der Hindernisabstände
-  const CHAIN_P = [0, 0.2, 0.4, 0.45, 0.5];
+  const CHAIN_P = [0, 0.12, 0.2, 0.22, 0.25];
   const GAP_RAND = [300, 260, 170, 150, 150];
 
   function makeBg(type, x) {
@@ -726,7 +726,9 @@
   }
   function makeObstacle() {
     // Hauptsache Mülleimer, dazu Fluchtwegschilder und selten ein Wassereimer
-    const t = (score >= 20 && Math.random() < 0.4) ? 'sign' : 'bin';
+    // Schilder insgesamt (einzeln + Ketten) etwa 45 %, Mülleimer etwa 55 %
+    const c = CHAIN_P[phase(score)], signP = (0.45 - c) / (1 - c);
+    const t = (score >= 20 && Math.random() < signP) ? 'sign' : 'bin';
     // Easter Egg: Dachschaden – selten statt eines Mülleimers ein Eimer mit Pfütze, von der Decke tropft es
     if (t === 'bin' && score >= 30 && Math.random() < 0.08) {
       return { type: 'bucket', w: 48, h: 18, y: GROUND - 18, drip: Math.floor(rand(0, 200)) };
