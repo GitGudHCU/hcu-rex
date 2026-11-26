@@ -654,8 +654,8 @@
 
   let state = 'ready', speed = 0, dist = 0, score = 0, best = loadBest();
   let obstacles = [], bg = [], floorBits = [], particles = [], flies = [], drops = [], stains = [];
-  let spawnGap = 0, pendingGroup = null, flash = null, sub = null, hatFall = null, overAt = 0, frame = 0;
-  let wallOff = 0, carried = 0, returned = 0, startedAt = 0, finalCups = 0, lostCups = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
+  let spawnGap = 0, pendingGroup = null, flash = null, hatFall = null, overAt = 0, frame = 0;
+  let wallOff = 0, cupBlink = 0, carried = 0, returned = 0, startedAt = 0, finalCups = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
   const dino = { x: 50, alt: 0, v: 0, jumping: false, duckHeld: false };
 
   // ---------- Laufbahn ----------
@@ -731,10 +731,8 @@
     return { type: 'sign', w: 20 * P, h: 12 * P, y: GROUND - off - 12 * P };
   }
   function makeObstacle() {
-    // Schlafende Studis: im Schnitt jedes 5. Hindernis
-    let t;
-    if (Math.random() < 0.2) t = (score >= 60 && Math.random() < 0.33) ? 'students' : 'student';
-    else t = (score >= 20 && Math.random() < 0.4) ? 'sign' : 'bin';
+    // Hauptsache Mülleimer, dazu Fluchtwegschilder und selten ein Wassereimer
+    const t = (score >= 20 && Math.random() < 0.4) ? 'sign' : 'bin';
     // Easter Egg: Dachschaden – selten statt eines Mülleimers ein Eimer mit Pfütze, von der Decke tropft es
     if (t === 'bin' && score >= 30 && Math.random() < 0.08) {
       return { type: 'bucket', w: 48, h: 18, y: GROUND - 18, drip: Math.floor(rand(0, 200)) };
@@ -745,13 +743,6 @@
       const k = weightedCups(), perRow = n === 3 ? 4 : 3, cups = [];
       for (let i = 0; i < k; i++) cups.push({ ux: (i % perRow) * 6, tier: Math.floor(i / perRow) });
       return { type: 'bin', n: n, lids: lids, w: n * 8 * P, h: 15 * P, y: GROUND - 15 * P, cups: cups, collected: false };
-    }
-    if (t === 'student' || t === 'students') {
-      const people = [];
-      for (let i = 0; i < (t === 'students' ? 2 : 1); i++) {
-        people.push({ s: pick(SHIRTS), h: pick(HAIR), f: pick(SKIN), p: pick(PANTS), prop: Math.random() < 0.5 ? LAPTOP : MODEL, zz: Math.floor(rand(0, 60)) });
-      }
-      return { type: 'student', people: people, w: people.length * 36, h: 13 * P, y: GROUND - 13 * P };
     }
     return makeSign(pick([SIGN_LOW, SIGN_HEAD, SIGN_HEAD, SIGN_HIGH]));
   }
@@ -773,7 +764,6 @@
   function obstacleBoxes(o) {
     if (o.type === 'bin') return [{ x: o.x + 3, y: GROUND - 30 + 3, w: o.w - 6, h: 27 }];
     if (o.type === 'bucket') return [{ x: o.x + 4, y: GROUND - 6, w: o.w - 8, h: 6 }, { x: o.x + 16, y: GROUND - 17, w: 18, h: 17 }];
-    if (o.type === 'student') return o.people.map((p, i) => ({ x: o.x + i * 36 + 3, y: GROUND - 24, w: 30, h: 24 }));
     return [{ x: o.x + 2, y: o.y + 2, w: o.w - 4, h: o.h - 4 }];   // nur das Schild, die Stangen nicht
   }
   function dinoBoxes() {
@@ -811,7 +801,7 @@
   function start() {
     newPlan();
     state = 'play'; speed = START_SPEED; dist = 0; score = 0; pendingGroup = null;
-    obstacles = []; particles = []; flies = []; drops = []; stains = []; flash = null; sub = null; hatFall = null;
+    obstacles = []; particles = []; flies = []; drops = []; stains = []; flash = null; hatFall = null;
     bg = bg.filter(b => b.type !== 'cafe');
     spawnGap = 380; carried = 0; returned = 0; startedAt = performance.now();
     board.hideSubmit();
@@ -868,9 +858,8 @@
     state = 'over';
     overAt = performance.now();
     score = Math.floor(score);
-    // Tassen, die schon zum Café fliegen, zählen noch; die auf dem Tablett gehen verloren
+    // Tassen, die schon zum Café fliegen, zählen noch
     finalCups = returned + flies.filter(f => f.kind === 'cafe').length;
-    lostCups = carried + flies.filter(f => f.kind === 'tray').length;
     if (finalCups > best) { best = finalCups; saveBest(best); }
     const lvl = hatLevel(score);
     board.offer(finalCups, score, (performance.now() - startedAt) / 1000);
@@ -904,7 +893,7 @@
       if (hatFall.y >= GROUND) { hatFall.y = GROUND; hatFall.rest = true; }
     }
     if (flash) { flash.life -= dt; if (flash.life <= 0) flash = null; }
-    if (sub) { sub.life -= dt; if (sub.life <= 0) sub = null; }
+    if (cupBlink > 0) cupBlink -= dt;
     flies.forEach(f => {
       f.t += dt / f.dur;
       if (f.t >= 1) { f.dead = true; if (f.kind === 'tray') carried++; else { f.cafe.served++; returned++; } }
@@ -966,9 +955,7 @@
             const sl = traySlot(i);
             drops.push({ x: sl.x, y: sl.y, vx: rand(1.5, 4.5), vy: rand(-4.5, -1.5) });   // fliegen nach vorn und landen vor einem
           }
-          const n = carried - keep;
           carried = keep;
-          sub = { t: (n === 1 ? '1 Tasse' : n + ' Tassen') + ' runtergefallen!', life: 90, bad: true };
         }
       }
     }
@@ -994,7 +981,7 @@
           flies.push({ kind: 'cafe', cafe: b, slot: b.served + i, fx: s.x, fy: s.y, t: 0, dur: 14 + (i % 20) * 2 });
         }
         carried = 0;
-        if (n) sub = { t: (n === 1 ? '1 Tasse' : n + ' Tassen') + ' zurückgebracht', life: 120 };
+        if (n) cupBlink = 60;   // Tassenzähler blinkt kurz
       }
     }
 
@@ -1022,11 +1009,10 @@
       rect(x + 12, top + 12, 16, 20, '#eef3f4');
       rect(x + 30, top + 48, 6, 2, '#d2d5d8'); rect(x + 32, top + 50, 2, 4, '#d2d5d8');
       rect(x + 44, top + 30, 12, 8, '#fcfcfb'); rect(x + 46, top + 32, 8, 2, '#e0e0dc');
-      if (b.rail) {   // Geländer direkt vor der Tür
-        const rc = '#c3c9ce';
-        rect(x - 6, LINE - 40, 52, 2, rc);
-        rect(x - 6, LINE - 22, 52, 2, rc);
-        for (const px of [-6, 19, 44]) rect(x + px, LINE - 40, 2, 40, rc);
+      if (b.rail) {   // Handlauf an der Wand, ca. 1 m hoch, läuft einfach quer vor der Tür entlang
+        const ry = LINE - 44;
+        rect(x - 40, ry, 136, 2, '#bcc3c8');
+        for (const px of [-34, 88]) { rect(x + px, ry + 2, 2, 4, '#bcc3c8'); rect(x + px - 2, ry + 6, 6, 2, '#bcc3c8'); }
       }
     } else if (b.type === 'hydrant') {
       rect(x, LINE - 72, 26, 46, '#ececea');
@@ -1204,18 +1190,14 @@
 
   function drawHUD() {
     ctx.font = 'bold 15px ' + FONT; ctx.textAlign = 'right'; ctx.fillStyle = C.ink;
-    const blinkScore = sub && !sub.bad && sub.life > 90 && Math.floor(frame / 8) % 2 === 0;
+    const blinkScore = cupBlink > 0 && Math.floor(frame / 8) % 2 === 0;
     ctx.fillText('BEST ' + pad(best) + '   TASSEN ' + (blinkScore ? '   ' : pad(state === 'over' ? finalCups : returned)), W - 12, 24);
     if (state === 'play') {
       ctx.textAlign = 'left'; ctx.font = 'bold 13px ' + FONT; ctx.fillStyle = C.accent;
       ctx.fillText(stageLabel(score), 12, 24);
-      pix(MUG, 12, 34, MUG_PAL);
-      ctx.fillStyle = C.ink; ctx.font = 'bold 12px ' + FONT;
-      ctx.fillText('× ' + carried + ' auf dem Tablett', 26, 42);
     }
     ctx.textAlign = 'center';
     if (flash) { ctx.fillStyle = C.accent; ctx.font = 'bold 18px ' + FONT; ctx.fillText(flash.t, W / 2, 66); }
-    if (sub) { ctx.fillStyle = sub.bad ? '#c0392b' : '#8a6d4b'; ctx.font = 'bold 13px ' + FONT; ctx.fillText(sub.t, W / 2, 88); }
 
     if (state === 'ready') {
       ctx.fillStyle = C.ink;
@@ -1227,7 +1209,6 @@
       ctx.fillStyle = C.ink;
       ctx.font = 'bold 26px ' + FONT; ctx.fillText((finalCups === 1 ? '1 Tasse' : finalCups + ' Tassen') + ' zurückgebracht', W / 2, 86);
       ctx.font = '14px ' + FONT; ctx.fillText('Gestolpert ' + reachedLabel(score), W / 2, 110);
-      if (lostCups) ctx.fillText((lostCups === 1 ? '1 Tasse' : lostCups + ' Tassen') + ' vom Tablett gefallen', W / 2, 130);
       ctx.fillStyle = C.accent; ctx.font = 'bold 13px ' + FONT;
       ctx.fillText('Leertaste / Antippen für Neustart', W / 2, 154);
     }
@@ -1239,7 +1220,6 @@
     drawGround();
     obstacles.forEach(o => {
       if (o.type === 'bin') drawBin(o);
-      else if (o.type === 'student') o.people.forEach((p, i) => drawStudent(p, o.x + i * 36));
       else if (o.type === 'bucket') drawBucket(o);
       else drawSign(o);
     });
