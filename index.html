@@ -29,9 +29,10 @@
   #board button:disabled { opacity: 0.5; cursor: default; }
   #submitMsg { flex-basis: 100%; font-size: 13px; }
   #list { list-style: none; margin: 0; padding: 0; font-size: 14px; }
-  #list li { display: grid; grid-template-columns: 2.2em 1fr auto; gap: 8px; padding: 5px 2px; border-bottom: 1px solid #eee; font-variant-numeric: tabular-nums; }
+  #list li { display: grid; grid-template-columns: 2.2em 1fr auto auto; gap: 8px; padding: 5px 2px; border-bottom: 1px solid #eee; font-variant-numeric: tabular-nums; }
   #list li .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #list li .v { font-weight: bold; }
+  #list li .v { font-weight: bold; text-align: right; min-width: 5.5em; }
+  #list li .t { color: #888; text-align: right; }
   #list li.me { color: #c4561d; }
   #list .empty { display: block; color: #888; border: 0; }
   .note { font-size: 11px; color: #888; margin-top: 10px; }
@@ -65,7 +66,7 @@
   <details id="privacy">
     <summary>Datenschutz</summary>
     <p><b>Verantwortlich:</b> Jannik Rietz, jannik.rietz@hcu-hamburg.de. Dies ist ein privates, nicht kommerzielles Spiel.</p>
-    <p><b>Bestenliste:</b> Wenn du auf „Eintragen“ tippst, werden dein Spitzname, die Zahl der zurückgebrachten Tassen, die Spieldauer, der Zeitpunkt und eine zufällige Gerätekennung gespeichert. Name und Tassen sind öffentlich zu sehen, die Gerätekennung nicht. Sie sorgt nur dafür, dass jedes Gerät einen Eintrag hat. Rechtsgrundlage ist deine Einwilligung durch das Eintragen (Art. 6 Abs. 1 lit. a DSGVO). Ohne Eintragen wird nichts gespeichert.</p>
+    <p><b>Bestenliste:</b> Wenn du auf „Eintragen“ tippst, werden dein Spitzname, die Zahl der zurückgebrachten Tassen, die Spieldauer, der Zeitpunkt und eine zufällige Gerätekennung gespeichert. Name, Tassen und Spieldauer sind öffentlich zu sehen, die Gerätekennung nicht. Sie sorgt nur dafür, dass jedes Gerät einen Eintrag hat. Rechtsgrundlage ist deine Einwilligung durch das Eintragen (Art. 6 Abs. 1 lit. a DSGVO). Ohne Eintragen wird nichts gespeichert.</p>
     <p><b>Auf deinem Gerät:</b> Im Browser-Speicher liegen dein Bestwert, dein Spitzname und die Gerätekennung. Es gibt keine Cookies, kein Tracking und keine Werbung.</p>
     <p><b>Dienstleister:</b> Die Seite liegt bei Netlify, Inc. (USA). Die Bestenliste liegt in einer Datenbank von Supabase, Inc. mit Serverstandort in Irland (EU). Beide Anbieter verarbeiten beim Aufruf technisch bedingt deine IP-Adresse und Browserdaten in kurzlebigen Server-Protokollen. Rechtsgrundlage ist das berechtigte Interesse am sicheren Betrieb der Seite (Art. 6 Abs. 1 lit. f DSGVO). Die Übermittlung in die USA ist über die Auftragsverarbeitungsverträge der Anbieter mit EU-Standardvertragsklauseln abgesichert.</p>
     <p><b>Deine Rechte:</b> Du kannst Auskunft, Berichtigung oder Löschung deines Eintrags verlangen. Schreib dazu eine Mail mit deinem Spitznamen an die Adresse oben. Du kannst dich außerdem bei einer Datenschutz-Aufsichtsbehörde beschweren, in Hamburg beim Hamburgischen Beauftragten für Datenschutz und Informationsfreiheit.</p>
@@ -1229,8 +1230,7 @@
     } else if (state === 'over') {
       ctx.fillStyle = C.ink;
       ctx.font = 'bold 26px ' + FONT; ctx.fillText((finalCups === 1 ? '1 Tasse' : finalCups + ' Tassen') + ' zurückgebracht', W / 2, 86);
-      ctx.font = '14px ' + FONT; const m = Math.floor(finalSecs / 60), sec = Math.floor(finalSecs % 60);
-      ctx.fillText('Gestolpert ' + reachedLabel(score) + ' nach ' + m + ':' + String(sec).padStart(2, '0') + ' min', W / 2, 110);
+      ctx.font = '14px ' + FONT; ctx.fillText('Gestolpert ' + reachedLabel(score), W / 2, 110);
       ctx.fillStyle = C.accent; ctx.font = 'bold 13px ' + FONT;
       ctx.fillText('Leertaste / Antippen für Neustart', W / 2, 154);
     }
@@ -1280,7 +1280,7 @@
     }
 
     function load() {
-      fetch(api + 'scores?select=id,name,cups&order=cups.desc,created_at.asc&limit=10', { headers: headers })
+      fetch(api + 'scores?select=id,name,cups,duration_s&order=cups.desc,created_at.asc&limit=10', { headers: headers })
         .then(r => r.ok ? r.json() : Promise.reject(r.status))
         .then(render)
         .catch(() => { el('list').innerHTML = ''; const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'Bestenliste gerade nicht erreichbar.'; el('list').appendChild(li); });
@@ -1291,8 +1291,9 @@
       rows.forEach((r, i) => {
         const li = document.createElement('li');
         if (r.id === lastId) li.className = 'me';
-        [String(i + 1) + '.', r.name, r.cups + (r.cups === 1 ? ' Tasse' : ' Tassen')].forEach((t, j) => {
-          const sp = document.createElement('span'); sp.className = ['r', 'n', 'v'][j]; sp.textContent = t; li.appendChild(sp);
+        const d = r.duration_s || 0, time = Math.floor(d / 60) + ':' + String(d % 60).padStart(2, '0') + ' min';
+        [String(i + 1) + '.', r.name, time, r.cups + (r.cups === 1 ? ' Tasse' : ' Tassen')].forEach((t, j) => {
+          const sp = document.createElement('span'); sp.className = ['r', 'n', 't', 'v'][j]; sp.textContent = t; li.appendChild(sp);
         });
         list.appendChild(li);
       });
