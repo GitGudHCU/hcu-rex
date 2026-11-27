@@ -673,7 +673,7 @@
   let state = 'ready', speed = 0, dist = 0, score = 0, best = loadBest();
   let obstacles = [], bg = [], particles = [], flies = [], drops = [], stains = [];
   let spawnGap = 0, pendingGroup = null, flash = null, hatFall = null, overAt = 0, frame = 0;
-  let wallOff = 0, floorPos = 0, cupBlink = 0, carried = 0, returned = 0, startedAt = 0, finalCups = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
+  let wallOff = 0, floorPos = 0, cupBlink = 0, carried = 0, returned = 0, startedAt = 0, finalCups = 0, finalSecs = 0;   // returned = insgesamt ans Café zurückgebrachte Tassen
   const dino = { x: 50, alt: 0, v: 0, jumping: false, duckHeld: false };
 
   // ---------- Laufbahn ----------
@@ -876,7 +876,8 @@
     finalCups = returned + flies.filter(f => f.kind === 'cafe').length;
     if (finalCups > best) { best = finalCups; saveBest(best); }
     const lvl = hatLevel(score);
-    board.offer(finalCups, score, (performance.now() - startedAt) / 1000);
+    finalSecs = (performance.now() - startedAt) / 1000;
+    board.offer(finalCups, score, finalSecs);
     if (lvl > 0) hatFall = { lvl: lvl, x: dino.x + 10 * P, y: GROUND - dino.alt - 19 * P, vx: -1.2, vy: -5, rest: false };
   }
 
@@ -1228,7 +1229,8 @@
     } else if (state === 'over') {
       ctx.fillStyle = C.ink;
       ctx.font = 'bold 26px ' + FONT; ctx.fillText((finalCups === 1 ? '1 Tasse' : finalCups + ' Tassen') + ' zurückgebracht', W / 2, 86);
-      ctx.font = '14px ' + FONT; ctx.fillText('Gestolpert ' + reachedLabel(score), W / 2, 110);
+      ctx.font = '14px ' + FONT; const m = Math.floor(finalSecs / 60), sec = Math.floor(finalSecs % 60);
+      ctx.fillText('Gestolpert ' + reachedLabel(score) + ' nach ' + m + ':' + String(sec).padStart(2, '0') + ' min', W / 2, 110);
       ctx.fillStyle = C.accent; ctx.font = 'bold 13px ' + FONT;
       ctx.fillText('Leertaste / Antippen für Neustart', W / 2, 154);
     }
